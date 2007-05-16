@@ -1,0 +1,1012 @@
+#!/bin/sh
+
+###############################################################################
+##
+#   mkliveiso - make live iso image, using squashfs+unionfs for r/w fs
+#   Copyright (c) 2002-2007 by Elia Yehuda <z4ziggy_at_gmail_dot_com>
+#
+#   coded by:
+#   Elia Yehuda, aka z4ziggy
+#   Phil Dillon-Thiselton, aka dtw
+#
+#   For Arch Linux only - using Arch Linux tools (pacman) and init scripts
+#
+#   TODO
+#   search for boot device via kernel/bios instead of searching for boot-cd
+#
+#   overview: TODO
+##
+###############################################################################
+
+version=0.6
+
+. /etc/rc.conf
+. /etc/rc.d/functions
+. /usr/share/archie/archie.conf
+module_path=/usr/share/archie/modules
+module_list=$(echo $(ls $module_path))
+
+# traps CTRL-C
+trap halt 2
+
+###############################################################################
+# functions and wrappers
+###############################################################################
+
+usage()
+{
+	echo "Usage: "
+	echo "  mkliveiso [options] <target>"
+	echo "    <target> is the target partition/imagefile/directory to use as live root"
+	echo
+	echo "Options:"
+	echo "  -h, --help                   display this help message"
+	echo "  -q, --quiet                  quiet mode (default is verbose)"
+	echo "  -n, --installarch            format and install Arch system on <target>"
+	echo "  -a, --install2arch <pkg(s)>  install <package(s)> to target Arch system"
+	echo "  -i, --install2iso <pkg(s)>   install <package(s)> to live Arch system only"
+	echo "  -b, --buildiso <isotype>     build a pre-customized Archie iso."
+	echo "      (installed types: `echo $module_list | sed 's/ /\//g'`)"
+	echo "  -g, --gfx <gfxtype>          (with --buildiso) use specific gfx driver instead"
+	echo "      of autodetect (none/dri/nvidia/nvidia_71xx/nvidia_96xx/ati)"
+	echo "  -G, --nogfx                  (with --buildiso) same as --gfx none"
+	echo "  -E, --execludedirs <path(s)> exclude path(s) from final iso"
+	echo "  -c, --archieconf <path>      use alternate path for Archie configuration files"
+	echo "  -p, --syncpacman             synchronize pacman repositories (pacman -Sy)"
+	echo "  -t, --tmp                    use /tmp while creating archie iso"
+	echo "  -U, --nousb                  dont include usb modules in initram.gz"
+	echo "  -F, --nofirewire             dont include firewire modules in initram.gz"
+	echo "  -X, --noextralive            dont install extra live packages for various hw"
+	echo "  -S, --nosplash               dont install gensplash"
+	echo "  -s, --splashtheme <name>     specify a gensplash theme (default: $splashtheme)"
+	echo "  -y, --syslinux               use syslinux instead of grub as iso bootloader"
+	echo "  -e, --exec <command>         execute script or command before creating the iso"
+	echo "  -Z, --nolzma                 don't use lzma in squashfs"
+	echo "  -u, --save2usb <partition>   save the live system directly to usb <partition>"
+	echo "  -o, --saveas <filename>      save iso as <filename> (default: ./$isoname)"
+#	echo "  -b,--blocksize <size>       squashfs blocksize to use in Kb (default: $blocksize)"
+	echo
+	exit
+}
+
+scan_parameters()
+{
+	# format the parameters...
+	set -- "$@"
+	# check for command line parameter(s)
+	[ -z "$1" ] && [ -z "$target" ] && usage
+	# getting command line parameter(s)
+	while [ "$#" -gt "0" ]; do
+		case "$1" in
+			-h|-?|--help)
+				usage
+				;;
+			-q|--quiet)
+				quiet="yes"
+				;;
+			-t|--tmp)
+				usetmp="yes"
+				;;
+			-c|--archieconf)
+				[ ! -d "$2" ] && usage
+				archieconf="$2"
+				[ -z "$archieconf" ] && archieconf=`pwd`
+				#. $archieconf/archie.conf
+				shift
+				;;
+			-o|--saveas)
+				isoname=${2}
+				shift
+				;;
+			-u|--save2usb)
+				if [ ! -b "${2}" ]; then
+					printerr "${2} is not a valid partition. Aborting..."
+					exit
+				fi
+				save2usb="${2}"
+				# umount the partition in case it is mounted...
+				umount $save2usb >/dev/null 2>&1
+				shift
+				;;
+			-b|--buildiso)
+				buildiso="$2"
+				count=0
+				for iso in $module_list ; do
+					if [ "$buildiso" == "$iso" ] ; then
+						count=$(($count + 1))
+					fi
+				done
+				if [ "$count" -lt "1" ] ; then
+					printerr "unknown Archie iso-type: $buildiso (only `echo $module_list | sed 's/ /\//g'` are supported)"
+					exit
+				else
+					shift
+				fi
+				;;
+			-n|--installarch)
+				installarch="yes"
+				;;
+			-a|--install2arch)
+				install2arch="$2"
+				shift
+				;;
+			-i|--install2iso)
+				install2iso="$2"
+				shift
+				;;
+			-E|--execludedirs|--ignoredirs)
+				ignoredirs="$2"
+				shift
+				;;
+			-F|--nofirewire)
+				copyfirewire="no"
+				;;
+			-U|--nousb)
+				copyusb="no"
+				;;
+			-X|--noextralive)
+				installextralivepkgs="no"
+				;;
+			-Z|--nolzma)
+				lzma="no"
+				;;
+			-G|--nogfx)
+				gfx="none"
+				;;
+			-S|--nosplash)
+				installsplash="no"
+				;;
+			-s|--splashtheme)
+				if [ ! -f $splashthemesdir/$2/$splashres.cfg ];then
+					printerr "could not find gensplash theme '$2' for resolution $splashres. using default instead."
+				else
+					splashtheme="$2"
+				fi
+				shift
+				;;
+			-p|--syncpacman)
+				syncpacman="yes"
+				;;
+			-y|--syslinux)
+				bootloader="syslinux"
+				;;
+			-e|--exec)
+				execcmd="$2"
+				shift
+				;;
+			-g|--gfx)
+				gfx="$2"
+				case $gfx in 
+					none|dri|nvidia|nvidia_71xx|nvidia_96xx|ati|auto) shift; ;;
+					*) printerr "unknown GFX type: $gfx (only none/dri/nvidia/nvidia_71xx/nvidia_96xx/ati/auto are supported)"; exit; ;;
+				esac
+				;;
+			*)
+				if [ ! -b "$1" ] && [ ! -f "$1" ] && [ ! -d "$1" ]; then
+					printerr "unknown parameter or invalid partition/imagefile/directory for target: '$1'"
+					usage
+					exit
+				fi
+				target="$1"
+				rootparam=""
+				[ -f $target ] && rootparam="-o loop"
+				[ -d $target ] && rootparam="--bind"
+				;;
+		esac
+		shift
+	done
+}
+
+cleanup()
+{
+	stat_busy "Cleaning up"
+	
+# 	# making sure we dont have mounts hanging from pacman_remote() procedure
+# 	umount $pacmanpkg
+# 	for pacdir in `ls $pacmanlib`; do
+# 		[ "$pacdir" != "local" ] && [ -d $pacmanlib/$pacdir ] && umount $1/$pacmanlib/$pacdir
+# 	done
+
+	# to be on the safe side we umount $workdir/archieroot in case its mounted
+	umount $workdir/archieroot >/dev/null 2>&1
+	# and free unionfs module
+	modprobe -r $unionfs >/dev/null 2>&1
+
+	# now we can start with releasing mounts
+	umount $archroot >/dev/null 2>&1
+
+	[ ! -z "$save2usb" ] && umount $workdir/archieiso
+
+	# scan for hanging mounts...
+	HANGMOUNTS=`grep $workdir /proc/mounts | awk '{print $2}'`
+	if [ ! -z "$HANGMOUNTS" ]; then
+		# lets try to umount hanging mounts before giving up
+		# doing it twice in case one mount prevent from another to umount
+		for mntpoint in $HANGMOUNTS; do umount -f $mntpoint >/dev/null 2>&1 ; done
+		for mntpoint in $HANGMOUNTS; do umount -f $mntpoint >/dev/null 2>&1 ; done
+		umount $archroot > /dev/null 2>&1
+		HANGMOUNTS=`grep $workdir /proc/mounts | awk '{print $2}'`
+	fi
+
+	if [ -z "$HANGMOUNTS" ]; then
+		[ -d $workdir ] && rm -r $workdir
+		stat_done
+	else
+		# if nothing worked and we still have hanging mounts, inform the user
+		stat_fail
+		printerr "Cant remove $workdir - hanging mounts found : $HANGMOUNTS"
+	fi
+}
+
+printerr()
+{
+	echo -e "$C_OTHER$PREFIX_HL ${C_FAIL}$1$C_CLEAR "
+}
+
+fail()
+{
+	printerr "Oops, an error occured, abandoning ship..."
+	cleanup
+	exit
+}
+
+halt()
+{
+	printerr "So, you wanna break, ea? let me cleanup for you..."
+	cleanup
+	exit
+}
+
+# a better wrapper for pacman to install into a remote location. it uses the local 
+# systems' repository instead of targets' repository, by mounting targets' directories 
+# into current system directories. using this wrapper (hopefully) eliminates pacman 
+# mounts hanging if/when mkliveiso fails...
+pacman_remote()
+{
+	[ -d $1/$pacmanpkg ] || mkdir -p $1/$pacmanpkg
+	mount --bind $pacmanpkg $1/$pacmanpkg
+
+	for pacdir in `ls $pacmanlib`; do
+		[ "$pacdir" = "local" ] || [ ! -d $pacmanlib/$pacdir ] && continue
+		[ -d $1/$pacmanlib/$pacdir ] || mkdir -p $1/$pacmanlib/$pacdir
+		mount --bind $pacmanlib/$pacdir $1/$pacmanlib/$pacdir
+	done
+
+	pacman -S --noconfirm -r $*
+	pacman_result=$?
+	
+	umount $1/$pacmanpkg
+	for pacdir in `ls $pacmanlib`; do
+		[ "$pacdir" != "local" ] && [ -d $pacmanlib/$pacdir ] && umount $1/$pacmanlib/$pacdir
+	done
+	return $pacman_result
+}
+
+check_repositories()
+{
+	# checking for [archie], [unstable] and [community] repositories in /var/lib/pacman amd pacman.conf
+	repositories="archie unstable community"
+	for repo in ${repositories}; do
+		if [ ! "$(egrep /$repo /etc/pacman.conf | grep -v "#")" ] && [ ! "$(grep "\[$repo\]" /etc/pacman.conf)" ]; then
+			echo "  : Could not find [$repo] local repository. make sure you've added [$repo]"
+			echo "  : repository to your /etc/pacman.conf"
+			echo
+			return 1
+		fi
+		if [ ! -d $pacmanlib/$repo ]; then
+			echo "  : Could not find [$repo] local repository. make sure you've executed 'pacman -Sy'"
+			echo
+			return 1
+		fi
+	done
+}
+
+check_unionfs()
+{
+	# make sure we have unionfs ready
+	if [ $(zcat /proc/config.gz | grep CONFIG_AUFS_FS=y) ]; then
+		unionfs=aufs
+		return 0
+	elif [ $(zcat /proc/config.gz | grep CONFIG_UNION_FS=y) ]; then
+		unionfs=unionfs
+		return 0
+	elif [ $(modprobe -l | grep aufs.ko) ]; then
+		modprobe -f aufs
+		if [ $? -ne 0 ] ; then
+			echo "  : Failed to insert aufs module.  Please check your configuration."
+			echo "  : Check 'dmesg | tail' for further information."
+			return 1
+		fi
+		unionfs=aufs
+	elif [ $(modprobe -l | grep unionfs.ko) ]; then
+		modprobe -f unionfs
+		if [ $? -ne 0 ] ; then
+			echo "  : Failed to insert unionfs module.  Please check your configuration."
+			echo "  : Check 'dmesg | tail' for further information."
+			return 1
+		fi
+		unionfs=unionfs
+		return 0
+	else
+		echo "  : The kernel you are running does not appear to have unionfs enabled."
+		echo "  : Please install the appropriate aufs or unionfs  module pkg for your"
+		echo "  : kernel or install the aufs-auto pkg (pacman -S aufs-auto) to"
+		echo "  : build and install the module for your kernel"
+		return 1
+	fi
+}
+
+init_archie()
+{
+	# since not everyone has a huge memory (*cough*), we're using temp folder in the home directory
+	if [ "$usetmp" = "yes" ]; then
+		workdir=/tmp/archie-tmp-$$
+	else
+		workdir=$HOME/archie-tmp-$$
+	fi
+	initrddir=$workdir/mnt/initrd
+	archroot=$workdir/mnt/archroot
+	
+	if [ "$syncpacman" = "yes"  -o ! -d $pacmanlib/archie ]; then
+		pacman -Sy
+	fi
+	
+	mkdir -p $workdir/{tmp,arch,archieiso/boot}
+	mkdir -p $workdir/archieroot/{initrd,root,etc/{archie/gfx,rc.d,pam.d,conf.d},dev,proc,sys,bin,sbin,usr,tmp}
+	chmod 1777 $workdir/archieroot/tmp
+	mkdir -p $initrddir
+	mkdir -p $archroot
+
+	splashinfo=""
+
+	[ -z "$bootloader" ] && bootloader="grub"
+
+	[ ! -z "$save2usb" ] && mount "$save2usb" $workdir/archieiso
+}
+
+format_target()
+{
+	echo -e "$C_OTHER$PREFIX_HL ${C_FAIL}Are you sure you want to format and install Arch linux on ${C_H1}$target${C_FAIL} ? [y/N] ${C_CLEAR}\c "
+	read key
+	if [ -z $key ] || [ ! $key = 'y' -a ! $key = 'Y' ]; then
+		printhl "No problem. I'm leaving now..."
+		[ ! -z "$save2usb" ] && umount $workdir/archieiso
+		rm -r $workdir
+		exit
+	fi
+	printhl "Formatting $target (ext2)..."
+	mkfs.ext2 -F -q -L Archie-$version $target || return 1
+}
+
+install_arch()
+{
+	#printhl "Installing Arch Linux base on $target"
+	archpkgs=""
+	# instead of using pacman, we will can simply copy the repositories libraries -
+	# which means we wont need internet connection if our cache has all our packages :)
+	pacman -Sy -r $archroot
+	#mkdir -p $archroot/var/lib/pacman
+	#for dir in `ls /var/lib/pacman`; do
+	#	[ "$dir" != "local" ] && cp -r /var/lib/pacman/$dir $archroot/var/lib/pacman/
+	#done
+	mkdir -p $archroot/etc/
+	# grab base setup/packages.txt, and install to <target>
+	#printhl "Downloading Arch linux base package list"
+	[ -f /var/cache/pacman/pkg/packages.txt ] && cp /var/cache/pacman/pkg/packages.txt $workdir/arch/packages.txt ||
+		wget -q ftp://ftp.archlinux.org/current/os/i686/setup/packages.txt -O $workdir/arch/packages.txt
+	[ $? -ne 0 ] && return 1
+	# remove carriage returns which mess everything up
+	sed -i s%\\r%%g $workdir/arch/packages.txt
+	for pkg in `cat $workdir/arch/packages.txt`; do
+		pkgprefix="${pkg%%/*}"
+		pkgfile="${pkg##*/}"
+		pkgname="${pkgfile%-*-*.pkg.tar.gz}"
+		if [ "${pkgprefix}" = "base" ]; then
+			for ignorepkg in $ignorepkglist; do
+				[ "$ignorepkg" = "$pkgname" ] && break
+			done
+			[ "$ignorepkg" != "$pkgname" ] && archpkgs="${archpkgs} ${pkgname}"
+		fi
+	done
+	# we must install coreutils 1st...
+	pacman_remote $archroot "-d coreutils"
+	[ $? -ne 0 ] && return 1
+	pacman_remote $archroot "-f $archpkgs"
+	[ $? -ne 0 ] && return 1
+
+	# installing /etc/fstab 1st due to new pacman.conf NoUpgrade rules
+	install -m 644 $archieconf/etc/fstab $archroot/etc/fstab
+	[ ! -f $target ] && echo "$target / ext2 defaults 0 0" >> $archroot/etc/fstab
+	mkdir -p $archroot/etc/X11
+	cp /etc/pacman.conf $archroot/etc
+	cp -r /etc/pacman.d $archroot/etc
+	# we need to copy some files due to new pacman.conf NoUpgrade rules...
+	#cp /etc/{rc.conf,rc.local} $archroot/etc
+	#cp $archieconf/buildarchie/etc/{group,passwd,shadow} $archroot/etc
+	# if we dont build archie iso, use current Arch system files:
+	#[ ! "$buildarchie" = "yes" ] && cp /etc/{group,passwd,shadow} $archroot/etc
+
+#	echo -e "/usr/X11R6/lib\n"\
+#		"/opt/xfce4/lib\n"\
+#		"/opt/mozilla/lib/firefox\n"\
+#		"/opt/kde/lib\n"\
+#		"/opt/gnome/lib\n"\
+#		"/opt/qt/lib\n"\
+#		"/opt/e17/lib\n"\
+#		> $archroot/etc/ld.so.conf
+
+	mknod -m 600 $archroot/dev/initctl p
+	mknod $archroot/dev/log c 21 5
+	#making sure we'll have bitmaps fonts!
+	mkdir -p $archroot/etc/fonts/conf.d/
+	ln -sf yes-bitmaps.conf $archroot/etc/fonts/conf.d/10-bitmaps.conf
+	#chroot $archroot /usr/bin/fc-cache -f
+	# set 'english' as default locale
+	sed -i 's/#en_US/en_US/g' $archroot/etc/locale.gen
+	chroot $archroot /usr/sbin/locale-gen
+	return 0
+}
+
+# returns a list of packages which are not installed on target
+check_pkgs_to_install()
+{
+	chkpkglist=""
+	for pkg in $*; do
+		if [ ${pkg::1} == '-' ]; then
+			# this is a parameter - pass it to the pkglist
+			chkpkglist+="$pkg "
+		else
+			pkgs=`pacman -Sg $pkg 2> /dev/null`
+			if [ ! -z "$pkgs" ]; then
+				# this is a group
+				for perpkg in $pkgs; do
+					[ $perpkg != $pkg ] && chkpkglist+="$perpkg "
+				done
+			else
+				# this is just a package
+				chkpkglist+="$pkg "
+			fi
+		fi
+	done
+	for pkg in $chkpkglist; do
+		[ -z "`pacman -Q $pkg -r $archroot 2>/dev/null`" ] && echo "$pkg "
+	done
+}
+
+verify_archie_packages()
+{
+	# no need to update pacman on a fresh install
+#	if [ "$installarch" != "yes" ]; then
+#		printhl "Updating pacman packages on target partition ($target)"
+#		pacman_remote $archroot -yu
+#	fi
+	# you must supply a gfx type with buildiso - rather than bother the user we set a sane default
+	# check for and install our gfx driver and deps
+	[ -z ${gfx} ] && gfx="auto"
+	if [ "$gfx" == "auto" ]; then
+		gfxpkglist="$gfx_nvidia $gfx_nvidia_71xx $gfx_nvidia_96xx $gfx_ati $gfx_dri"
+	else
+		eval gfxpkglist=\$gfx_$gfx
+	fi
+	gfxpkgs=$(check_pkgs_to_install $gfxpkglist)
+	unset gfxpkglist
+	# now add the rest of our pkgs (ignore commented lines)
+	archiepkgs=$(check_pkgs_to_install $(awk '!/\#/ {print $1}' $module_path/${buildiso}/packages.txt))
+	return 0
+}
+
+prepare_archie()
+{
+	#printhl "Installing Archie packages and scripts in jail (live root)"
+	isopkgs="$install2iso"
+	# checking for installed packages, and add to "install list" missing packages
+	isopkgs=$(check_pkgs_to_install $livepkglist)
+	[ "$installextralivepkgs" != "no" ] && isopkgs+=$(check_pkgs_to_install $extralivepkglist)
+	[ "$installsplash" = "yes" ] && isopkgs+=$(check_pkgs_to_install $gensplashpkglist)
+
+	# we use unionfs to mount 2 dirs (1 ro, 1 rw) into 1 rw dir to emulate the live
+	# directory on the iso. just gotta love unionfs :-)
+	mount -t $unionfs -o dirs=$workdir/archieroot=rw:$archroot=ro none $workdir/archieroot
+	[ $? -ne 0 ] && return 1
+	# FIXME: to avoid building init-ramfs by kernel package, we use alias...
+	#alias mkinitcpio='true'
+	if [ ! -z "$isopkgs" ]; then
+		chmod -x $workdir/archieroot/sbin/mkinitcpio
+		# using -f because of stupid nvidia and xorg gl include files conflicts
+		pacman_remote $workdir/archieroot "-d -f $isopkgs"
+		ret_code=$?
+		#unalias mkinitcpio
+		chmod +x $workdir/archieroot/sbin/mkinitcpio
+		[ $ret_code -ne 0 ] && return 1
+	fi
+
+	# only download the next packages (install l8r)
+	livepkgs=""
+	[ -z "`pacman -Q $bootloader 2>/dev/null`" ] && livepkgs="${livepkgs} $bootloader"
+	[ -z "`pacman -Q busybox 2>/dev/null`" ] && livepkgs="${livepkgs} busybox"
+	[ ! -z "$livepkgs" ] && pacman_remote $workdir/archieroot "-d -w $livepkgs"
+	[ $? -ne 0 ] && return 1
+	
+#	if [ "$buildiso" ]; then
+#		# ugly way to fix sudo for live user on some desktop files...
+#		[ -f $workdir/archieroot/usr/share/applications/gparted.desktop ] && \
+#			sed -i -r 's/^Exec=/Exec=sudo /g' $workdir/archieroot/usr/share/applications/gparted.desktop
+#		[ -f $workdir/archieroot/opt/gnome/share/applications/firestarter.desktop ] && \
+#			sed -i -r 's/^Exec=/Exec=sudo /g' $workdir/archieroot/opt/gnome/share/applications/firestarter.desktop
+#	fi
+
+	# release unionfs mount
+	umount $workdir/archieroot
+	
+	# copying kernel
+	mkdir -p $workdir/archieiso/boot >/dev/null 2>&1
+	vmlinuz=$workdir/archieroot/boot/vmlinuz26beyond
+	[ ! -f $vmlinuz ] && vmlinuz=$archroot/boot/vmlinuz26beyond
+	cp $vmlinuz $workdir/archieiso/boot/vmlinuz
+
+	# backing-up Arch configuration files to be overwritten with Archie files
+	cp $archroot/etc/rc.d/functions $workdir/archieroot/etc/rc.d/functions.arch
+	# installing Archie configs and scripts
+	for file in {rc.conf,hosts,fstab,modprobe.conf,pam.d/su,archie/xorg.conf.template,rc.d/functions,conf.d/gensplash} ; do 
+		install -m 644 $archieconf/etc/$file $workdir/archieroot/etc/$file
+	done 
+	
+	# installing Archie init scripts, using $archieconf/custom when available
+	for file in {rc.sysinit,rc.single,rc.multi,rc.local,rc.shutdown,mkxcfg,hd-install} ; do 
+		#install -m 755 $archieconf/$file $workdir/archieroot/etc/archie/$file
+		if [ -e $archieconf/custom/$file ] ; then 
+			install -m 755 $archieconf/custom/$file $workdir/archieroot/etc/archie/$file
+		else 
+			install -m 755 $archieconf/etc/archie/$file $workdir/archieroot/etc/archie/$file
+		fi 
+	done 
+	
+	if [ "$buildiso" ]; then
+		# copy private customization files (passwd, themes, etc)
+		for file in {group,passwd,shadow,pam.d/su,acpi/events/power,locale.gen}; do
+			install -D -m 644 $archieconf/etc/$file $workdir/archieroot/etc/$file
+		done
+		#cp $archroot/etc/inittab $workdir/archieroot/etc/inittab.arch
+		cp  $archieconf/etc/inittab $workdir/archieroot/etc/inittab
+		# check for a custom readahead.list
+		install -m 440 $archieconf/etc/sudoers $workdir/archieroot/etc/sudoers
+		install -m 755 $archieconf/etc/archie/xautostart $workdir/archieroot/etc/archie/xautostart
+		# create archie home dir and copy files
+		[ ! -d $workdir/archieroot/home/archie ] && mkdir -p $workdir/archieroot/home/archie
+		[ ! -d $workdir/archieroot/home/archie/Desktop ] && mkdir -p $workdir/archieroot/home/archie/Desktop
+
+		# copy the skeleton files from etc/skel
+		cp -r $archroot/etc/skel/. $workdir/archieroot/root/
+		cp -r $archroot/etc/skel/. $workdir/archieroot/home/archie/
+		# copy files for module specific files
+		[ -f $module_path/$buildiso/inittab ] && cp $module_path/$buildiso/inittab $workdir/archieroot/etc/inittab
+		[ -f $module_path/$buildiso/readahead.list ] && \
+			install -D -m 644 $module_path/$buildiso/readahead.list $workdir/archieroot/etc/readahead-list/readahead.list
+		[ -f $module_path/$buildiso/.xinitrc ] && cp $module_path/$buildiso/.xinitrc $workdir/archieroot/root/.xinitrc
+		[ -f $module_path/$buildiso/.xinitrc ] && cp $module_path/$buildiso/.xinitrc $workdir/archieroot/home/archie/.xinitrc
+		# copy directory structure (if exists) from module path to archieroot
+		find $module_path/$buildiso/* -type d -exec cp -r '{}' $workdir/archieroot/ \;  >/dev/null 2>&1
+		# and set proper owner on the files we just copied
+		chown -R root:root $workdir/archieroot/root/
+		chown -R 1000:100 $workdir/archieroot/home/archie
+
+		# support for autogfx
+		if [ "$gfx" = "auto" ]; then
+			apkglist=""
+			install -m 755 $archieconf/etc/archie/autogfx $workdir/archieroot/etc/archie/autogfx
+			# put gfx package names from archie.conf in autogfx
+			gfxpkglist="\$gfx_nvidia \$gfx_nvidia_71xx \$gfx_nvidia_96xx \$gfx_ati \$gfx_dri"
+			set -- $gfxpkglist
+			while [ "$#" -gt "0" ]; do
+				eval apkglist="$1"
+				sed -i 's/^'${1:1}'[= ].*/'${1:1}'="'"${apkglist}"'"/g' $workdir/archieroot/etc/archie/autogfx
+				shift
+			done
+		fi
+	else
+		# patch current inittab on target partition to match archie startup scripts
+		sed 's|/etc/rc.|/etc/archie/rc.|g' $archroot/etc/inittab > $workdir/archieroot/etc/inittab
+	fi
+
+	# doing cleanning up here instead of in rc.sysinit
+	/bin/rm -f $workdir/archieroot/{etc/nologin,etc/shutdownpid,var/lock/*,forcefsck} >/dev/null 2>&1
+	/bin/rm -rf $workdir/archieroot/tmp/{*,.*} >/dev/null 2>&1
+	[ -d $workdir/archieroot/var/run ] && (cd $workdir/archieroot/var/run && find . ! -type d -exec rm -f -- {} \; )
+	#: > $workdir/archieroot/var/run/utmp
+
+	return 0
+}
+
+check_kernel_dir()
+{
+	kernel_dir="$archroot/lib/modules/*/kernel/$1"
+	[ ! -d $archroot/lib/modules/*/kernel/$1 ] && kernel_dir="$workdir/archieroot/lib/modules/*/kernel/$1"
+}
+
+create_initramfs()
+{
+	pacman_remote $workdir/tmp "-d busybox" >/dev/null 2>&1
+	mkdir -p $initrddir/{bin,sbin,usr/{bin,sbin}}
+	install -m 755 -D $workdir/tmp/bin/busybox $initrddir/bin/busybox
+	#install -m 755 -D $workdir/tmp/bin/busybox $initrddir/bin/ln
+	#install -m 755 -D $workdir/tmp/bin/busybox $initrddir/bin/sh
+	install -m 755 $archieconf/initrd/linuxrc $initrddir/init
+	install -m 644 $archieconf/initrd/liblinuxrc $initrddir/liblinuxrc
+	mkdir -p $initrddir/{dev,sys,mnt/{cdrom,squashimg,liveroot/tmp},proc,tmp,modules}
+	chmod 1777 $initrddir/tmp
+	mknod $initrddir/dev/console c 5 1
+	mknod $initrddir/dev/null c 1 3
+	mknod $initrddir/dev/ram b 1 1
+	mknod $initrddir/dev/systty c 4 0
+	mknod $initrddir/dev/tty c 5 0
+	mknod $initrddir/dev/tty1 c 4 1
+
+	# scsi_mod nls_iso8859-1 <== are built into beyond kernel
+	#kernel_dir="$workdir/archieroot/lib/modules/*/kernel"
+	#[ ! -d $workdir/archieroot/lib/modules/ ] && kernel_dir="$archroot/lib/modules/*/kernel"
+	# is this better?
+	check_kernel_dir "drivers/ide"
+	for mod in {ide-core.ko,ide-generic.ko,ide-disk.ko,ide-cd.ko}; do
+		cp $kernel_dir/$mod $initrddir/modules/
+	done
+	check_kernel_dir "drivers/cdrom"
+	cp $kernel_dir/cdrom.ko $initrddir/modules/
+	check_kernel_dir "drivers/scsi"
+	cp $kernel_dir/sd_mod.ko $initrddir/modules/
+	cp $kernel_dir/sr_mod.ko $initrddir/modules/
+	check_kernel_dir "fs/nls"
+	cp $kernel_dir/nls_cp437.ko $initrddir/modules/
+	cp $kernel_dir/nls_iso8859-2.ko $initrddir/modules/
+	check_kernel_dir "lib/zlib_deflate"
+	cp $kernel_dir/zlib_deflate.ko $initrddir/modules/
+	check_kernel_dir "lib/zlib_inflate"
+	cp $kernel_dir/zlib_inflate.ko $initrddir/modules/
+	check_kernel_dir "fs"
+	cp $kernel_dir/mbcache.ko $initrddir/modules/
+	for mod in {squashfs,aufs,unionfs,fat,vfat,msdos,ntfs,jbd,ext2,ext3,reiserfs,reiser4,jfs,xfs,isofs,udf}; do
+		check_kernel_dir "fs/$mod"
+		cp $kernel_dir/$mod.ko $initrddir/modules/
+	done
+	#check_kernel_dir "fs/squashfs"
+	#cp $kernel_dir/unlzma.ko $initrddir/modules/
+	#cp $kernel_dir/sqlzma.ko $initrddir/modules/
+
+	if [ "$copyusb" = "yes" ]; then
+		check_kernel_dir "drivers/usb"
+		for mod in {core/usbcore,storage/usb-storage,host/ohci-hcd,host/uhci-hcd,host/ehci-hcd} ; do
+			cp $kernel_dir/$mod.ko $initrddir/modules/
+		done
+	fi
+	if [ "$copyfirewire" = "yes" ]; then
+		check_kernel_dir "drivers/ieee1394"
+		for mod in {sbp2,ohci1394,ieee1394} ; do
+			cp $kernel_dir/$mod.ko $initrddir/modules/
+		done
+	fi
+
+	(cd ${initrddir} && find . | cpio --quiet --dereference -o -H newc | gzip -9 >$workdir/archieiso/boot/initram.gz)
+	return $?
+}
+
+add_gensplash()
+{
+	[ -z "${splashvox}" ] && splashvox="silent"
+	# lets check the kernel config which is installed on archieroot
+	mount -t $unionfs -o dirs=$workdir/archieroot=rw:$archroot=ro none $workdir/archieroot
+	[ $? -ne 0 ] && return 1
+	config_file=`pacman -r $workdir/archieroot -Ql kernel26beyond | grep '\.config' | awk '{print $2}'`
+	if [ ! -z "`grep "CONFIG_FB_VESA_TNG=y" $config_file`" ]; then
+		splashinfo="video=vesafb:ywrap,mtrr,$splashres-16@60 console=tty1 splash=$splashvox,theme:$splashtheme"
+	else
+		splashinfo="vga=791 console=tty1 splash=$splashvox,theme:$splashtheme"
+	fi
+	umount $workdir/archieroot
+
+	# not using splash_geninitramfs since we need to make sure theme files are also
+	# copied to target Arch system
+	#splash_geninitramfs -r $splashres -a $workdir/archieiso/boot/initram.gz $splashtheme
+
+	mkdir -p $initrddir/{bin,sbin,usr/{bin,sbin}}
+	cp /sbin/splash_helper ${initrddir}/sbin
+	cp /sbin/splash_helper $workdir/archieroot/sbin
+	mkdir -p ${initrddir}/etc/splash/$splashtheme/images
+	mkdir -p $workdir/archieroot/etc/splash/$splashtheme/images
+	cp /etc/splash/$splashtheme/$splashres.cfg ${initrddir}/etc/splash/$splashtheme/
+	cp /etc/splash/$splashtheme/$splashres.cfg $workdir/archieroot/etc/splash/$splashtheme/
+
+
+	t="[0-9*]"
+	# config file parsing
+	pics=`cat "/etc/splash/$splashtheme/$splashres.cfg" | \
+			sed -r -e "/(^(silent)?jpeg=)|(^(silent)?pic${t}*=)/! d" \
+			-e 's/[a-z0-9]+=(.*)/\1/'`
+	for pic in $pics ; do
+		cp -pRH --parents /etc/splash/$splashtheme/$pic ${initrddir}/
+		cp -pRH --parents /etc/splash/$splashtheme/$pic $workdir/archieroot/
+	done
+	
+	icons=`cat "/etc/splash/$splashtheme/$splashres.cfg" | \
+			egrep -v '^#' | grep icon | awk '{print $2}'`
+	for icon in ${icons} ; do
+		cp -pRH --parents /etc/splash/$splashtheme/$icon ${initrddir}/
+		cp -pRH --parents /etc/splash/$splashtheme/$icon $workdir/archieroot/
+	done
+	
+	fonts=`cat "/etc/splash/$splashtheme/$splashres.cfg" | \
+			egrep -v '^#' | grep 'text ' | grep -o '[^ ]\+\.ttf'`
+	for font in ${fonts} ; do
+		cp -pRH --parents /etc/splash/$splashtheme/$font ${initrddir}/
+		cp -pRH --parents /etc/splash/$splashtheme/$font $workdir/archieroot/
+	done
+
+	font=`cat "/etc/splash/$splashtheme/$splashres.cfg" | egrep -v '^#' | grep 'text_font='`
+	font=${font#*=}
+	if [[ -n "${font}" ]]; then
+		cp -pRH --parents /etc/splash/$splashtheme/$font ${initrddir}/
+		cp -pRH --parents /etc/splash/$splashtheme/$font $workdir/archieroot/
+	else
+		cp -pRH --parents /etc/splash/luxisri.ttf ${initrddir}/
+		cp -pRH --parents /etc/splash/luxisri.ttf $workdir/archieroot/
+	fi
+
+	(cd ${initrddir} && find . | cpio --quiet --dereference -o -H newc | gzip -9 >$workdir/archieiso/boot/initram.gz)
+	return $?
+}
+
+add_bootsplash()
+{
+	splashinfo="splash=silent"
+	config=$splashthemesdir/$splashtheme/config/bootsplash-$splashres.cfg
+	/sbin/splash -s -f $config >> $workdir/archieiso/boot/initram.gz
+	return $?
+}
+
+create_squashfs_image()
+{
+	# files and directories to ignore on the squashfs image
+	[ -f $archroot/etc/.pwd.lock ] && ignoredirs="etc/.pwd.lock $ignoredirs"
+	[ -d $archroot/lost+found ] && ignoredirs="lost+found $ignoredirs"
+	ignoredirs="tmp var/log var/mail var/abs var/cache/pacman var/cache/man $ignoredirs"
+	# mounting 2 dirs into 1 : archieroot (as read-write) and archroot (as read-only)
+	mount -t $unionfs -o dirs=$workdir/archieroot=rw:$archroot=ro none $workdir/archieroot 
+	[ $? -ne 0 ] && return 1
+	# making sure we have updated bindings on archieroot
+	ldconfig -r $workdir/archieroot
+	# finally making the squashfs image
+	[ "$quiet" == "yes" ] && noprogress="-no-progress > /dev/null" || noprogress=""
+	[ "$lzma" == "no" ] && mksqopt="-nolzma" || mksqopt=""
+	mksquashfs $workdir/archieroot/ $workdir/archieiso/archie.sqf "$mksqopt" -always-use-fragments -e $ignoredirs $noprogress
+	#mksquashfs $archroot/ $workdir/archieroot/ $workdir/archieiso/archie.sqf -no-duplicates -e $ignoredirs > /dev/null
+	[ $? -ne 0 ] && return 1
+	umount $workdir/archieroot -t $unionfs
+}
+
+create_grub_iso()
+{
+	mkdir -p $workdir/archieiso/boot/grub >/dev/null 2>&1
+	if [ -z "`pacman -Q $bootloader 2>/dev/null`" ]; then
+		pacman_remote $workdir/tmp "-d $bootloader" #>/dev/null 2>&1
+		cp $workdir/tmp/usr/lib/grub/i386-pc/* $workdir/archieiso/boot/grub/
+	else
+		cp /usr/lib/grub/i386-pc/* $workdir/archieiso/boot/grub/
+	fi
+	[ -e $archieconf/grub/splash.xpm.gz ] && cp $archieconf/grub/splash.xpm.gz $workdir/archieiso/boot/grub/splash.xpm.gz
+
+	# we dont generate boot.lst if the user supplied one
+	if [ -f $module_path/$buildiso/boot/grub/menu.lst ]; then
+		sed 's/%splashinfo%/$splashinfo/g' $module_path/$buildiso/boot/grub/menu.lst > $workdir/archieiso/boot/grub/menu.lst
+	elif [ -f $archieconf/grub/menu.lst ]; then
+		sed 's/%splashinfo%/$splashinfo/g' $archieconf/grub/menu.lst > $workdir/archieiso/boot/grub/menu.lst
+	else
+		echo -e "timeout   10\n"\
+"default 0\n"\
+"splashimage /boot/grub/splash.xpm.gz\n"\
+"background  203050\n"\
+"color   light-blue/black light-cyan/blue\n\n"\
+"title   Archie 0.6 - Graphical mode\n"\
+"kernel  /boot/vmlinuz quiet $splashinfo\n"\
+"initrd  /boot/initram.gz\n\n"\
+"title   Archie 0.6 - Command line mode\n"\
+"kernel  /boot/vmlinuz quiet $splashinfo 3\n"\
+"initrd  /boot/initram.gz\n\n"\
+"title   Archie 0.6 - Home nesting\n"\
+"kernel  /boot/vmlinuz quiet $splashinfo homenest=\n"\
+"initrd  /boot/initram.gz\n\n"\
+"title   Archie 0.6 - Root nesting\n"\
+"kernel  /boot/vmlinuz quiet $splashinfo rootnest=\n"\
+"initrd  /boot/initram.gz\n\n"\
+"title   Boot from 1st hard-drive\n"\
+"rootnoverify (hd0)\n"\
+"chainloader +1\n\n"\
+"\n"\
+		>> $workdir/archieiso/boot/grub/menu.lst
+	fi
+
+	if [ ! -z "$save2usb" ]; then
+		grub-install --root-directory=$workdir/archieiso --no-floppy --recheck $save2usb
+	else
+		mkisofs -o $isoname -b boot/grub/stage2_eltorito \
+		-no-emul-boot -boot-load-size 4 -boot-info-table -l -R -r -quiet \
+		-publisher "Archie project: archie.dotsrc.org" -A "Archie $version" \
+		$workdir/archieiso > /dev/null 2>&1
+	fi
+	return 0
+}
+
+create_iso()
+{
+	# to be (grub) or not to be (syslinux), THAT is the question...
+	[ "$bootloader" == "syslinux" ] && create_syslinux_iso || create_grub_iso
+}
+
+create_syslinux_iso()
+{
+	if [ -z "`pacman -Q $bootloader 2>/dev/null`" ]; then
+		pacman_remote $workdir/tmp "-d $bootloader" #>/dev/null 2>&1
+		cp $workdir/tmp/usr/lib/syslinux/isolinux.bin $workdir/archieiso/boot/isolinux.bin
+	else
+		cp /usr/lib/syslinux/isolinux.bin $workdir/archieiso/boot/isolinux.bin
+	fi
+	for file in {splash.txt,splash.cfg,logo.lss,archie.c32} ; do 
+		[ -f $archieconf/syslinux/$file ] && install -m 644 $archieconf/syslinux/$file $workdir/archieiso/boot/$file
+	done
+	# we dont generate isolinux.cfg if the user supplied one
+	if [ -f $module_path/$buildiso/boot/isolinux.cfg ]; then
+		sed 's/%splashinfo%/$splashinfo/g' $module_path/$buildiso/boot/isolinux.cfg > $workdir/archieiso/boot/isolinux.cfg
+	elif [ -f $module_path/$buildiso/syslinux/isolinux.cfg ]; then
+		sed 's/%splashinfo%/$splashinfo/g' $module_path/$buildiso/syslinux/isolinux.cfg > $workdir/archieiso/boot/isolinux.cfg
+	elif [ -f $archieconf/syslinux/isolinux.cfg ]; then
+		sed 's/%splashinfo%/$splashinfo/g' $archieconf/syslinux/isolinux.cfg > $workdir/archieiso/boot/isolinux.cfg
+	else
+		echo -e "display splash.cfg\n"\
+"F1 splash.txt\n"\
+"F2 splash.cfg\n"\
+"default archie\n"\
+"prompt 1\n"\
+"timeout 30\n\n"\
+"label menu\n"\
+"  kernel archie.c32\n\n"\
+"label archie\n"\
+"  kernel vmlinuz\n"\
+"  append initrd=initram.gz quiet $splashinfo\n" \
+		>> $workdir/archieiso/boot/isolinux.cfg
+	fi
+	#"  append initrd=initram.gz vga=0x317 quiet $splashinfo\n"
+	[ ! -z "$save2usb" ] && mkisofs -o $isoname -b boot/isolinux.bin -c boot/boot.cat \
+		-no-emul-boot -boot-load-size 4 -boot-info-table -l -R -r -quiet \
+		-publisher "Archie project: archie.dotsrc.org" -A "Archie $version" \
+		$workdir/archieiso > /dev/null 2>&1
+	return 0
+}
+
+copy_auto_gfx()
+{
+	mount -t $unionfs -o dirs=$workdir/archieroot=rw:$archroot=ro none $workdir/archieroot
+	[ $? -ne 0 ] && return 1
+	# only download the packages
+	pacman_remote "$workdir/archieroot" "-w -d $gfxpkgs"
+	if [ $? -ne 0 ]; then
+		umount $workdir/archieroot
+		return 1
+	fi
+	# browse thru the packages and copy to /etc/archie/gfx
+	for pkg in `pacman_remote "$workdir/archieroot" "-pw -d $gfxpkgs"`; do
+		pkgfile="${pkg##*/}"
+		[ -f /var/cache/pacman/pkg/$pkgfile ] && cp /var/cache/pacman/pkg/$pkgfile $workdir/archieroot/etc/archie/gfx
+	done
+	umount $workdir/archieroot
+
+#	set -- $gfxpkglist
+#	while [ "$#" -gt "0" ]; do
+#		eval apkglist="$1"
+#		adirname="${1:5}"
+#		mkdir $workdir/$adirname
+#		mount -t $unionfs -o dirs=$workdir/$adirname=rw:$archroot=ro none $workdir/$adirname
+#		[ $? -ne 0 ] && return 1
+#		# temporarily removing all gfx packages from the unionfs 
+#		[ ! -z "$allgfxpkgs" ] && pacman -r $workdir/$adirname -Rd $allgfxpkgs > /dev/null 2>&1
+#		# and now we can install our gfx card cleanly
+#		pacman_remote $workdir/$adirname "-d -f $apkglist"
+#		umount $workdir/$adirname
+#		rm -r $workdir/$adirname/{tmp,etc} > /dev/null 2>&1
+#		# FIXME: we cant mount the sqf image on top of root system cause both
+#		# aufs and unionfs halts - NO IDEA WHY 
+#		mksquashfs $workdir/$adirname $workdir/archieroot/etc/archie/gfx/$adirname.sqf -no-progress > /dev/null
+#		#( cd $workdir/$adirname ; tar jcvf $workdir/archieroot/etc/archie/gfx/$adirname.tar.bz2 * > /dev/null )
+#		rm -r $workdir/$adirname
+#		shift
+#	done
+}
+
+status() 
+{
+	[ "$quiet" != "yes" ] && printhl "$1" || stat_busy "$1"
+	shift
+	[ "$quiet" != "yes" ] && $* || $* >/dev/null 2>&1
+	if [ $? -eq 0 ]; then
+		[ "$quiet" != "yes" ] || stat_done
+		return 0
+	else
+		[ "$quiet" != "yes" ] || stat_fail
+		fail
+		#return 1
+	fi
+}
+
+###############################################################################
+# program begin
+###############################################################################
+
+printhl "mkliveiso v$version, by z4ziggy at user-contributions.org\n"
+if [ "`id -u`" != "0" ]; then
+	echo -e "$C_OTHER$PREFIX_HL ${C_FAIL}You must use mkliveiso as root or using sudo. Aborting...$C_CLEAR "
+	exit
+fi
+
+scan_parameters "$@"
+check_repositories || exit
+check_unionfs || exit
+init_archie
+
+if [ "$installarch" = "yes" ]; then
+	format_target || fail
+	mount $target $archroot $rootparam || fail
+	status "Installing Arch Linux base system to $target" install_arch
+else
+	mount $target $archroot $rootparam || fail
+fi
+
+if [ "$buildiso" ]; then
+	status "Verifying $buildiso package list on target ($target)" verify_archie_packages
+	if [ "$gfx" != "none" ]; then
+		# install gfx drivers first so that incorrect libgl deps are not dragged in
+		if [ "$gfx" != "auto" ]; then
+			status "Installing $gfx packages to target ($target)" pacman_remote $archroot "-d $gfxpkgs"
+			[ $? -ne 0 ] && fail
+		else
+			status "Copying gfx packages for automatic detection into jail (live root)" copy_auto_gfx
+			[ $? -ne 0 ] && fail
+		fi
+	fi
+	if [ ! -z "$archiepkgs" ]; then
+		status "Installing $buildiso packages to target ($target)" pacman_remote $archroot "$archiepkgs"
+		[ $? -ne 0 ] && fail
+	fi
+	
+fi
+
+[ ! -z "$install2arch" ] && status "Installing selected packages to target ($target)" pacman_remote $archroot "$install2arch"
+
+# making sure fonts are cached properly... maybe this should be done somewhere else?
+# do we need fontconfig for this?
+[ -e $archroot/usr/bin/fc-cache ] && chroot $archroot /usr/bin/fc-cache -f
+# we can now set $archroot to readonly, just to prevent problems if program breaks...
+mount -o remount -r $archroot || fail
+
+status "Installing live CD packages and scripts in jail (live root)" prepare_archie
+[ $? -ne 0 ] && fail
+
+# regenerate locales
+#status "Generating locales" chroot $archroot /usr/sbin/locale-gen
+[ $installsplash = "yes" ] && status "Installing gensplash theme ($splashtheme) to initram.gz" add_gensplash
+status "Creating initial-ramfs (initram.gz)" create_initramfs
+#[ $installsplash = "yes" ] && status "Installing bootsplash theme to initrd.gz" add_bootsplash
+
+if [ ! -z "$execcmd" ]; then
+	# remounting $archroot with rw to allow users copy stuff on to it...
+	mount -o remount,rw $archroot
+	status "Executing $execcmd on target" "$execcmd" $archroot
+	mount -o remount,ro $archroot
+fi
+
+status "Creating compressed image (squashfs), go have a coffee..." create_squashfs_image
+if [ ! -z "$save2usb" ]; then
+	status "Installing grub bootmanager on $save2usb" create_grub_iso
+else
+	status "Creating final iso image ($isoname)" create_iso
+fi
+cleanup
+
+echo
+printhl "Completed successfully."
+#printhl "tip: use qemu to test your iso without burning it: qemu -m 512 -boot d -cdrom $isoname"

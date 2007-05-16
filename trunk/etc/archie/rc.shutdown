@@ -1,0 +1,125 @@
+#!/bin/sh
+#
+# /etc/archie/rc.shutdown
+#
+
+. /etc/rc.conf
+. /etc/rc.d/functions
+
+/sbin/splash shutdown
+
+# avoid staircase effect
+/bin/stty onlcr
+
+echo " "
+printhl "Initiating Shutdown..."
+echo " "
+
+# avoid NIS hanging syslog-ng on shutdown by unsetting the domainname
+if [ -x /bin/domainname ]; then
+	/bin/domainname ""
+fi
+
+if [ -x /etc/rc.local.shutdown ]; then
+	/etc/rc.local.shutdown
+fi
+
+if [ "$PREVLEVEL" = "3" -o "$PREVLEVEL" = "5" ]; then
+        # Shutdown daemons
+        let i=${#DAEMONS[@]}
+        while [[ i -ge 0 ]]; do
+                if [[ `echo ${DAEMONS[$i]} | grep '^[^\!]' | wc -l` -eq 1 ]]; then
+                        /etc/rc.d/${DAEMONS[$i]#@} stop
+                fi
+                let i=i-1
+        done
+        # find any leftover daemons and shut them down
+        if [ -d /var/run/daemons ]; then
+                for daemon in `ls /var/run/daemons`; do
+                        /etc/rc.d/$daemon stop
+                done
+        fi
+fi
+
+# Terminate all processes
+stat_busy "Sending SIGTERM To Processes"
+/sbin/killall5 -15 &> /dev/null
+/usr/bin/sleep 1
+stat_done
+
+stat_busy "Sending SIGKILL To Processes"
+/sbin/killall5 -9 &> /dev/null
+/usr/bin/sleep 1
+stat_done
+
+stat_busy "Saving Random Seed"
+/bin/dd if=/dev/urandom of=/var/run/random-seed count=1 bs=512 2> /dev/null
+stat_done
+
+# stat_busy "Saving System Clock"
+# if [ "$HARDWARECLOCK" = "UTC" ]; then
+# 	/sbin/hwclock --utc --systohc
+# else
+# 	/sbin/hwclock --localtime --systohc
+# fi
+# stat_done
+
+# removing psmouse module to fix some reboot issues on newer laptops
+modprobe -r psmouse >/dev/null 2>&1
+
+# Write to wtmp file before unmounting
+/sbin/halt -w
+
+stat_busy "Deactivating Swap"
+/sbin/swapoff -a 2>/dev/null 
+stat_done
+
+stat_busy "Unmounting Filesystems"
+/bin/umount -a 2>/dev/null
+stat_done
+
+if [ "$USELVM" = "yes" -o "$USELVM" = "YES" ]; then
+	if [ -d /etc/lvm -a -x /sbin/lvm ]; then
+		/bin/mount -n -t sysfs none /sys 2>/dev/null
+		if [ -d /sys/block ]; then
+			stat_busy "Deactivating LVM2 groups"
+			/sbin/lvm vgchange --ignorelockingfailure -an >/dev/null 2>&1
+			stat_done
+			umount /sys
+		fi
+	fi
+fi
+
+#########################################################
+# Archie specific
+
+# ejecting cd
+if check_bootparam "noeject"; then
+	echo 0 >/proc/sys/dev/cdrom/lock && echo 1 >/proc/sys/dev/cdrom/autoeject
+fi
+# # eject all cd's...
+# for cdrom in /proc/sys/dev/cdrom*/lock; do [ -f "$cdrom" ] && echo 0 > "$cdrom"; done
+# if [ "$EJECTCD" = "yes" ]; then
+# 	for cdrom in /proc/sys/dev/cdrom*/autoeject; do [ -f "$cdrom" ] && echo 1 > "$cdrom"; done
+# fi
+
+#########################################################
+
+#stat_busy "Remounting Root Filesystem Read-only"
+#/bin/mount -n -o remount,ro /
+#stat_done
+
+# Power off or reboot
+if [ "$RUNLEVEL" = "0" ]; then
+	printsep
+	printhl "${C_H2}POWER OFF"
+	/sbin/poweroff -d -f -h -i
+else
+	printsep
+	printhl "${C_H2}REBOOTING"
+	# adding kexec support
+	[ -x /usr/sbin/kexec ] && /usr/sbin/kexec -e > /dev/null 2>&1
+	/sbin/reboot -d -f -i
+fi
+
+# End of file

@@ -1,0 +1,124 @@
+#!/bin/bash
+
+###############################################################################
+##
+# mkxcfg - make X config, using ddcxinfo-arch and lshwd output
+# coded by z4ziggy 2005,2007 for the Archie project.
+#
+# inspired by mkxf86cfg by Klaus Knopper
+# heavily stripped down to bare minimum
+##
+###############################################################################
+
+###############################################################################
+## variables
+
+# some init stuff
+CMDLINE="$(cat /proc/cmdline)"
+KVER="$(uname -r)"
+LISTFILE=/tmp/lshwd.out
+XINFOTMP=/tmp/xinfo
+XTEMPLATE=/etc/archie/xorg.conf.template
+MONITORTMP=/tmp/monitor.tmp
+if [ -f /usr/bin/xorgcfg ]; then
+	conf_file="xorg.conf"
+else
+        conf_file="XF86Config-4"
+fi
+
+###############################################################################
+## general functions
+
+# Reread boot command line; echo last parameter's argument or return false.
+checkbootparam()
+{
+	case "$CMDLINE" in *\ $1*) return 0;; esac
+	return 1
+}
+
+# get boot param value if available, return 1 if not
+getbootparamvalue()
+{
+	case "$CMDLINE" in *\ $1=*) ;; *) return 1; ;; esac
+	result="${CMDLINE##*$1=}"
+	echo ${result%%[     ]*}
+}
+
+###############################################################################
+## begin work
+
+# check if lshwd output files are available already, execute lshwd if not
+if [ ! -a $LISTFILE ] || [ ! -a $XINFOTMP ]; then
+	lshwd -a -ox -m > $LISTFILE
+fi
+
+# check for vga module, default to vesa
+XMODULE=$(awk -F\" '/VGA compatible controller/{print $6;exit}' $LISTFILE)
+[ -n "$XMODULE" ] || XMODULE="vesa"
+
+# defaults to "mouse not detected"
+PSMOUSE='s|^.*InputDevice.*"PS/2 Mouse".*$|# PS/2 Mouse not detected|g;'
+USBMOUSE='s|^.*InputDevice.*"USB Mouse".*$|# USB Mouse not detected|g;'
+SERIALMOUSE='s|^.*InputDevice.*"Serial Mouse".*$|# Serial Mouse not detected|g;'
+
+# now search for the mouse device
+MOUSEDEV=$(awk -F\" '/Mouse/{print $8;exit}' $LISTFILE)
+case $MOUSEDEV in
+	*input*) # USB mouse
+		USBMOUSE=""
+		;;
+	*mouse) # Serial mouse
+		SERIALMOUSEE="s|/dev/ttyS0|$MOUSEDEV|g;"
+		;;
+	*) # using PS/2 as default
+		PSMOUSE=""
+		;;
+esac
+
+# checking for keymap or language parameters from boot command line
+KBDLANG="$(getbootparamvalue keymap 2>/dev/null)"
+[ -z $KBDLANG ] && KBDLANG="$(getbootparamvalue language 2>/dev/null)"
+# default to "us" keyboard
+XKEYBOARD="us"
+[ ! -z $KBDLANG ] && XKEYBOARD=$KBDLANG
+DEADKEYS=""
+[ "$XKEYBOARD" = "us" ] && DEADKEYS='s|^.*nodeadkeys.*$||g;'
+
+# Finally, lets try to get monitor and gfx-modes via ddcxinfo-arch
+FIRSTMODE="$(getbootparamvalue xvideo 2>/dev/null)"
+MODES=$(ddcxinfo-arch -modes -firstmode $FIRSTMODE )
+ddcxinfo-arch -monitor > $MONITORTMP
+
+# add nvidia/ati info to xinfo
+GFXCARD=$(grep Driver $XINFOTMP | awk '{print $2}' | xargs echo)
+case $GFXCARD in
+	nv|nvidia)
+		GFXOPTIONS='	Option "TripleBuffer" "True"\n'\
+'	Option "AddARGBGLXVisuals"\n'\
+'	Option "AllowGLXWithComposite" "true"\n'
+		sed -i 's|EndSection|'"$GFXOPTIONS"'EndSection|' $XINFOTMP
+		;;
+	ati)
+		GFXOPTIONS='	Option "XAANoOffscreenPixmaps" "true"\n'\
+'	Option "DRI" "true"\n'
+		sed -i 's|EndSection|'"$GFXOPTIONS"'EndSection|' $XINFOTMP
+		;;
+esac
+
+if [ -f /etc/X11/$conf_file ]; then 
+	cp /etc/X11/$conf_file /etc/X11/$conf_file.bak
+fi
+rm -f /etc/$conf_file /etc/X11/$conf_file 2>/dev/null
+
+sed -e 's|@@NOPM@@|'"$NOPM"'|g' \
+	-e '/@@MONITORSECTION@@/r '"$MONITORTMP" \
+	-e 's|@@MONITORSECTION@@||g;' \
+	-e '/@@DISPLAYSECTION@@/r '"$XINFOTMP" \
+	-e 's|@@DISPLAYSECTION@@||g;' \
+	-e "$SERIALMOUSE""$USBMOUSE""$PSMOUSE" \
+	-e 's|@@MODES@@|'"$MODES"'|g;' \
+	-e 's|"XkbLayout" *"[^"]*"|"XkbLayout" "'"$XKEYBOARD"'"|g;'"$DEADKEYS" \
+	$XTEMPLATE >/etc/X11/$conf_file
+
+# clean your room!
+rm -f "$MONITORTMP" "$LISTFILE" "$XINFOTMP" 2>/dev/null

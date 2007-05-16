@@ -1,0 +1,287 @@
+#!/bin/sh
+#
+# /etc/archie/rc.sysinit
+#
+
+. /etc/rc.conf
+. /etc/rc.d/functions
+
+echo " "
+printhl "Arch Linux v0.8 $C_OTHER(${C_H2}Voodoo$C_OTHER)\n"
+printhl "${C_H2}http://www.archlinux.org"
+printhl "Copyright 2002-2007 Judd Vinet"
+printhl "Distributed under the GNU General Public License (GPL)"
+printsep
+
+# start up our mini logger until syslog takes over
+/sbin/minilogd
+
+#[ -f /etc/readahead-list/readahead.list ] && \
+#	status "Processing readahead-list" \
+#	/sbin/readahead-list /etc/readahead-list/readahead.list
+
+# mount /proc
+mount -n -t proc none /proc
+
+# anything more serious than KERN_WARNING goes to the console
+# 'verbose' cmdline parameter enables more messages
+if grep -qw verbose /proc/cmdline; then
+	/bin/dmesg -n 8
+else
+	/bin/dmesg -n 3
+fi
+
+# mount /sys
+grep -qw sysfs /proc/filesystems && mount -n -t sysfs none /sys
+# mount usbfs  
+/sbin/modprobe usbcore >/dev/null 2>&1
+grep -qw usbfs /proc/filesystems && mount -n -t usbfs none /proc/bus/usb
+
+if [ -x /etc/start_udev -a -d /sys/block ]; then
+	# We have a start_udev script and /sys appears to be mounted, use UDev
+	status "Starting UDev Daemon" /etc/start_udev init
+else
+	# Static /dev, our last resort
+	status "Using static /dev filesystem" /bin/true
+fi
+
+# Load modules from the MODULES array defined in rc.conf
+if ! [ "$load_modules" = "off" ]; then 
+	if [ -f /proc/modules ]; then
+		stat_busy "Loading Modules"
+		for mod in "${MODULES[@]}"; do
+			if [ "$mod" = "${mod#!}" ]; then
+				/sbin/modprobe $mod
+			fi
+		done
+		stat_done
+	fi
+fi
+
+# run udev uevents
+if pidof -o %PPID /sbin/udevd >/dev/null; then
+	status "Loading UDev uevents" /etc/start_udev uevents
+fi
+
+# get ready for gensplash
+/sbin/splash init
+
+# Unmount and free up the old initrd if it exists
+# FIXME: obsoleted by initramfs
+if [ -f /initrd/linuxrc ]; then
+	stat_busy "Freeing memory from Initial Ramdisk"
+	umount /initrd 2>/dev/null
+	/sbin/blockdev --flushbufs /dev/rd/0 2>/dev/null
+	stat_done
+fi
+
+if [ "$USELVM" = "yes" -o "$USELVM" = "YES" ]; then
+	if [ -x /sbin/lvm -a -d /sys/block ]; then
+		# Kernel 2.6.x, LVM2 groups
+		stat_busy "Activating LVM2 groups"
+		/sbin/lvm vgscan --ignorelockingfailure --mknodes >/dev/null
+		/sbin/lvm vgchange --ignorelockingfailure -a y >/dev/null
+		if [ $? -ne 0 ]; then
+			stat_fail
+		else
+			stat_done
+		fi
+	fi
+fi
+
+#status "Mounting Root Read-only" /bin/mount -n -o remount,ro /
+
+# Set clock early to fix some bugs with filesystem checks
+# Clock is set again later to match rc.conf
+if [ -f /etc/localtime ]; then
+	if [ "$HARDWARECLOCK" = "UTC" ]; then
+		/sbin/hwclock --directisa --utc --hctosys --noadjfile
+	else
+		/sbin/hwclock --directisa --localtime --hctosys --noadjfile
+	fi
+fi
+
+NETFS="nonfs,nosmbfs,nocifs,nocodafs,noncpfs,nosysfs,nousbfs,noshfs,nofuse"
+
+stat_busy "Mounting Local Filesystems"
+#/bin/mount -n -o remount,rw /
+/bin/rm -f /etc/mtab*
+# Archie: Must do this, otherwise fam wont work with aufs/unionfs
+ln -s /proc/mounts /etc/mtab
+# since we link /etc/mtab to /proc/mounts, no need to remount :-)
+# make sure / gets written to /etc/mtab
+#/bin/mount -o remount,rw /
+# re-mount /proc , /sys  and usbfs so they can be written to /etc/mtab
+#umount /proc/bus/usb
+#umount /proc && mount -t proc none /proc
+#grep -qw sysfs /proc/filesystems && umount /sys && mount -t sysfs none /sys
+#if grep -qw usbfs /proc/filesystems; then
+#	# Some people use custom permissions for their usbfs
+#	if grep -qw /proc/bus/usb /etc/fstab; then
+#		mount /proc/bus/usb
+#	else
+#		mount -t usbfs none /proc/bus/usb
+#	fi
+#fi
+# now mount all the local filesystems
+/bin/mount -a -t $NETFS
+stat_done
+
+status "Activating Swap" /sbin/swapon -a
+
+stat_busy "Configuring System Clock"
+if [ ! -f /var/lib/hwclock/adjtime ]; then
+	echo "0.0 0 0.0" > /var/lib/hwclock/adjtime
+fi
+if [ "$TIMEZONE" != "" -a -e /usr/share/zoneinfo/$TIMEZONE ]; then
+	/bin/rm -f /etc/localtime
+	/bin/cp /usr/share/zoneinfo/$TIMEZONE /etc/localtime
+fi
+if [ "$HARDWARECLOCK" = "UTC" ]; then
+	/sbin/hwclock --directisa --utc --hctosys
+else
+	/sbin/hwclock --directisa --localtime --hctosys
+fi
+stat_done
+
+if [ -f /var/run/random-seed ]; then
+	stat_busy "Initializing Random Seed"
+	/bin/cat /var/run/random-seed >/dev/urandom
+	stat_done
+fi
+
+# Keep {x,k,g}dm happy with xorg
+mkdir /tmp/.ICE-unix && chmod 1777 /tmp/.ICE-unix
+mkdir /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+
+if [ "$HOSTNAME" != "" ]; then
+	status "Setting Hostname: $HOSTNAME" /bin/hostname $HOSTNAME
+fi
+
+# Set the NIS domain name, if necessary
+[ -f /etc/conf.d/nisdomainname ] && . /etc/conf.d/nisdomainname
+if [ "$NISDOMAINNAME" != "" ]; then
+	status "Setting NIS Domain Name: $NISDOMAINNAME" /bin/nisdomainname $NISDOMAINNAME
+fi
+
+BOOT_KEYMAP=`get_bootparam_value keymap`
+[ ! -z $BOOT_KEYMAP ] && KEYMAP=$BOOT_KEYMAP
+if [ "$KEYMAP" != "" ]; then
+	status "Loading Keyboard Map: $KEYMAP" /bin/loadkeys -q $KEYMAP
+fi
+
+# Flush old locale settings
+: >/etc/profile.d/locale.sh
+chmod 755 /etc/profile.d/locale.sh
+# Set locale
+BOOT_LOCALE=`get_bootparam_value locale`
+if [ ! -z $BOOT_LOCALE ]; then
+	LOCALE=$BOOT_LOCALE
+	# Set a fallback locale - in case rc.conf is wrong!
+	#[ "$LOCALE" = "" ] && LOCALE=en_US.UTF-8
+	# generate locale
+	echo $(echo $(cat /etc/locale.gen | grep -m 1 $LOCALE) | sed s/#//g) >>/etc/locale.gen
+	status "Generating locales" /usr/sbin/locale-gen
+fi
+# Set user defined locale
+[ "$LOCALE" == "" ] && LOCALE="en_US"
+stat_busy "Setting Locale: $LOCALE"
+echo "export LANG=$LOCALE" >>/etc/profile.d/locale.sh
+stat_done
+
+#	If locale is *.utf set console to Unicode mode
+if [ "`echo $LOCALE | /bin/grep -i utf`" ]; then
+	stat_busy "Setting Consoles to UTF-8"
+	/usr/bin/kbd_mode -u
+	/usr/bin/dumpkeys | /bin/loadkeys --unicode
+	# the $CONSOLE check helps us avoid this when running scripts from cron
+	echo 'if [ "$CONSOLE" = "" -a "$TERM" = "linux" -a isatty ]; then echo -ne "\e%G"; fi' >>/etc/profile.d/locale.sh
+	stat_done
+fi
+
+if [ "$CONSOLEFONT" != "" ]; then
+	stat_busy "Loading Console Font: $CONSOLEFONT"
+	for i in `seq 1 12`; do 
+		if [ "$CONSOLEMAP" != "" ]; then
+			/usr/bin/setfont -m $CONSOLEMAP $CONSOLEFONT -C /dev/vc/${i}
+		else
+			/usr/bin/setfont $CONSOLEFONT -C /dev/vc/${i}
+		fi
+	done
+	# the $CONSOLE check helps us avoid this when running scripts from cron
+	echo 'if [ "$CONSOLE" = "" -a "$TERM" = "linux" -a isatty ]; then echo -ne "\e(K"; fi' >>/etc/profile.d/locale.sh
+	stat_done
+fi
+# Adding persistent network/cdrom generated rules
+if [ -f "/dev/.udev/tmp-rules--70-persistent-cd.rules" ]; then
+	stat_busy "Adding persistent cdrom udev rules"
+	/bin/cat /dev/.udev/tmp-rules--70-persistent-cd.rules >> /etc/udev/rules.d/70-persistent-cd.rules
+	stat_done
+fi
+if [ -f "/dev/.udev/tmp-rules--70-persistent-net.rules" ]; then
+	stat_busy "Adding persistent network udev rules"
+	/bin/cat /dev/.udev/tmp-rules--70-persistent-net.rules >> /etc/udev/rules.d/70-persistent-net.rules
+	stat_done
+fi
+
+# Screen blanks after 15 minutes idle time
+/usr/bin/setterm -blank 15
+
+##############################################################################
+# Archie specific start
+#
+# checking for PCMCIA - trying to load pcmcia modules... ugly - should check for a nicer way...
+if check_bootparam "pcmcia"; then
+	/sbin/modprobe pcmcia_core >/dev/null 2>&1 
+	/sbin/modprobe yenta_socket >/dev/null 2>&1 || /sbin/modprobe tcic >/dev/null 2>&1
+	#/sbin/modprobe yenta_socket >/dev/null 2>&1 || /sbin/modprobe i82365 >/dev/null 2>&1 || /sbin/modprobe tcic >/dev/null 2>&1
+	if [ "$?" = "0" ]; then
+		stat_busy "Loading PCMCIA devices"
+		/sbin/modprobe ds >/dev/null 2>&1
+		/sbin/cardmgr >/dev/null 2>&1
+		# we need to allow some seconds for cardmgr to set devices
+		#sleep 1
+		stat_done
+	fi
+fi
+
+# finally an Archie specific function to justify our beings... :-)
+stat_busy "Detecting hardware devices" 
+/usr/bin/lshwd -a -ox -m > /tmp/lshwd.out 
+# setting volume
+amixer set Master 75% unmute >/dev/null 2>&1 
+amixer set PCM 75% unmute >/dev/null 2>&1
+stat_done
+
+[ -e /etc/archie/autogfx ] && status "Installing gfx drivers" /etc/archie/autogfx `get_bootparam_value gfx`
+
+USERNAME=`get_archie_username`
+if [ "$USERNAME" -a "$USERNAME" != "root" ]; then
+	if ! /usr/bin/id $USERNAME >/dev/null 2>&1; then
+		# create user if doesn't exist
+		stat_busy "Setting up Archie live user ($USERNAME)" 
+		HOMEDIR="/home/$USERNAME"
+		USERADDPARAM="-m"
+		# home directory might exists if nesting is used ;)
+		if [ -d $HOMEDIR ]; then 
+			LIVE_UID=`ls $HOMEDIR/.. -n | grep $USERNAME | awk '{ print $3 }'`
+			LIVE_GID=`ls $HOMEDIR/.. -n | grep $USERNAME | awk '{ print $4 }'`
+			USERADDPARAM="-g $LIVE_GID -u $LIVE_UID"
+		fi
+		[ -f /etc/.pwd.lock ] && rm /etc/.pwd.lock
+		/usr/sbin/useradd -p "" -G "users,disk,wheel,audio,optical" $USERADDPARAM $USERNAME > /dev/null 2>&1 &
+		echo "$USERNAME ALL=(ALL) NOPASSWD: ALL" >> /etc/sudoers
+		stat_done
+	fi
+fi
+
+[ -e /home/$USERNAME/.xinitrc ] || [ -e /root/.xinitrc ] && status "Creating customized X config" /etc/archie/mkxcfg
+
+# set things up for gensplash in rc.multi
+/sbin/splash multi
+
+#
+# Archie specific end
+##############################################################################
+
+# End of file

@@ -1,0 +1,156 @@
+#!/bin/bash
+
+###############################################################################
+##
+# hd-install script by z4ziggy at user-contributions.org
+# coded for the Archie project
+#
+#  this was supposed to be a very simple and short hd-install - sadly, it
+# grew up to be a working installer... X-)
+##
+###############################################################################
+
+. /etc/rc.conf
+. /etc/rc.d/functions
+
+usage()
+{
+	echo -e "Usage: "
+	echo -e "  $0 <target_partition>\n"
+	echo -e "<target_partition> is the partition you wish to install Arch Linux to\n"
+	exit
+}
+
+# writes percentage as status
+perc_stat()
+{
+	#echo -ne "$C_OTHER$PREFIX_REG $C_MAIN$1$C_CLEAR "
+	#deltext
+	#echo -ne "   $C_OTHER[${C_BUSY}$2 $C_OTHER]$C_CLEAR\r"
+    printf "$C_OTHER$PREFIX_REG $C_MAIN%-*s$C_CLEAR   $C_OTHER[${C_BUSY}%-4s$C_OTHER]$C_CLEAR\r" $STAT_COL "$1" "$2"
+}
+
+###############################################################################
+
+[ -z $1 ] || [ ! -b $1 ] && usage
+
+if [ "`id -u`" != "0" ]; then
+	echo -e "$C_OTHER$PREFIX_HL ${C_FAIL}You must run hd-install as root or using sudo. Aborting...$C_CLEAR "
+	exit
+fi
+
+targetpart=$1
+mntdir=/mnt/`basename $targetpart`
+
+# just to be on the safe side...
+umount $targetpart >/dev/null 2>&1
+
+# TODO: check for size of $targetpart if its enough...
+
+printhl "Would you like to format $targetpart (ReiserFS)? [y/N] \c "
+read key
+if [ $key = 'y' -o $key = 'Y' ]; then
+	stat_busy "Formatting $targetpart"
+	mkreiserfs -q -l Archie $targetpart >/dev/null 2>&1
+	stat_done
+fi
+mkdir -p $mntdir >/dev/null 2>&1
+mount $targetpart $mntdir >/dev/null 2>&1
+if [ $? -ne 0 ]; then
+	printhl "ERROR: Could not mount target partition ($targetpart), aborting..."
+	exit
+fi
+
+stat_busy "Collecting filenames to copy"
+find /{bin,boot,etc,home,lib,opt,root,sbin,usr,var} -noleaf > /tmp/filelist
+stat_done
+
+total=`wc -l /tmp/filelist | awk '{print $1}'`
+prog=0
+# turn cursor off
+echo -ne "\x1b[?25l"
+while read file; do 
+	prog=$(($prog+1))
+	#echo -ne "$(($prog*100/$total))% $prog/$total\r"
+	perc_stat "Copying files: $prog/$total" "$(($prog*100/$total))%"
+	if [ -f $file ]; then
+		cp -dp --parents $file $mntdir >/dev/null 2>&1
+		if [ $? -ne 0 ]; then
+			errcode=$?
+			stat_fail
+			umount $mntdir
+			printhl "ERROR: Copy failed (errorcode: $errcode). Aborting install..."
+			echo -ne "\x1b[?25h"
+			exit
+		fi
+	fi
+done < /tmp/filelist
+stat_done
+# turn cursor back on
+echo -ne "\x1b[?25h"
+
+stat_busy "Configuring Arch system"
+rm -r $mntdir/etc/archie
+mkdir -p $mntdir/{tmp,dev,proc,sys,mnt,media,var/run/dbus}
+chmod 1777 $mntdir/tmp
+for dir in `ls /mnt`; do mkdir $mntdir/mnt/$dir; done
+mv $mntdir/etc/inittab.arch $mntdir/etc/inittab
+mv $mntdir/etc/rc.d/functions.arch $mntdir/etc/rc.d/functions
+/bin/mknod $mntdir/dev/console c 5 1
+/bin/mknod $mntdir/dev/null c 1 3
+/bin/mknod $mntdir/dev/zero c 1 5
+# making sure users have their important modules loaded
+MODULES=$(lshwd -a -ox -m | awk -F\" '/audio|Ethernet|Network/{print $6}')
+sed -i 's|MODULES=.*|MODULES=('"$MODULES"')|' $mntdir/etc/rc.conf
+# remove the target mount point (if exists) from fstab and add it with proper partition fs
+sed -i '/'`basename $targetpart`'/d' $mntdir/etc/fstab
+echo "$targetpart / `mount | grep $targetpart | awk '{print $5}'` defaults,noatime 0 0" >> $mntdir/etc/fstab
+#sed -i 's|'"$targetpart"'.*|'"$targetpart"' / reiserfs defaults 0 0|g' $mntdir/etc/fstab
+# make sure we have a working X config (aint that nice... :-)
+[ -f /usr/bin/xorgcfg ] && conf_file="xorg.conf" || conf_file="XF86Config-4"
+if [ ! -f /etc/X11/$conf_file ]; then
+	/etc/archie/mkxcfg
+	[ -f /etc/X11/$conf_file ] && cp $mntdir/etc/X11/$conf_file
+fi
+# create initramfs 
+mkinitcpio -g $mntdir/boot/kernel26beyond.img >/dev/null 2>&1
+# looking for vmlinuz from whatever kernel(s) are installed...
+#vmlinuz=`ls /boot/vmlinuz*`
+vmlinuz="vmlinuz26beyond"
+/sbin/ldconfig -r $mntdir
+stat_done
+
+printhl "Would you like to install grub? [y/N] \c "
+read key
+if [ $key = 'y' -o $key = 'Y' ]; then
+	harddisk=`echo $targetpart | sed 's/[0-9]//g'`
+	printhl "To which disk would you like to install grub? (press [ENTER] for $harddisk)"
+	read userdisk
+	[ "$userdisk" != "" ] && harddisk=$userdisk
+	grub-install --recheck --no-floppy --root-directory=$mntdir $harddisk
+	# delete all titles from current menu.lst
+	sed -i '/^title/,+3d' $mntdir/boot/grub/menu.lst
+	grubroot=`grep "$targetpart" $mntdir/boot/grub/device.map | awk {'print $1'}`
+	if [ $? != 0 ]; then
+		printhl "Error $?: Could not obtain grub device name for $targetpart"
+	else
+		cat << EOF >> $mntdir/boot/grub/menu.lst
+title  Arch Linux
+root   $grubroot
+kernel /boot/$vmlinuz root=$targetpart vga=792 ro
+initrd /boot/kernel26beyond.img
+EOF
+	fi
+else
+	printhl "Please install/configure lilo/grub witn the followings parameters:"
+	cat << EOF
+title  Arch Linux
+root   (hd0)
+kernel /boot/$vmlinuz root=$targetpart vga=792 ro
+initrd /boot/kernel26beyond.img
+EOF
+fi
+
+umount $mntdir
+printhl "Finished installing Arch Linux! Reboot to enjoy your new system..."
+

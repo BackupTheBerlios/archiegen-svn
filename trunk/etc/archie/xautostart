@@ -1,0 +1,18 @@
+#!/bin/bash
+
+. /etc/rc.d/functions
+
+USERNAME=`get_archie_username`
+[ -z "$USERNAME" ] && USERNAME="archie"
+
+# not using .xinitrc on default to eliminate problems with nesting if .xinitrc exists
+#su - $USERNAME -c ". /etc/profile ; /opt/xfce4/bin/startxfce4 -- -br >& /dev/null &"
+
+# if you wish to use .xinitrc use the following :
+su - $USERNAME -c ". /etc/profile ; /usr/bin/startx -- -nolisten tcp -br >& /dev/null &"
+
+# or we can use the xinit directly with a user-defined xinitrc
+#su - $USERNAME -c ". /etc/profile ; /usr/bin/xinit /usr/share/archie/xinitrc -- -br >& /dev/null &"
+
+# turn off splash...
+#/sbin/splash exit
