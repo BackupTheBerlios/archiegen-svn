@@ -28,6 +28,8 @@ usage()
 {
 	echo "Usage:"
 	echo "  iso2usb <isofile> <partition>"
+	echo "Example:"
+	echo "  iso2usb archie.iso /dev/sdb1"
 	echo
 	echo "  <isofile>   = the iso file you wish to copy into the usb device"
 	echo "  <partition> = the usb partition you wish to install the iso file to"

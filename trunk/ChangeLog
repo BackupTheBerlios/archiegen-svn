@@ -32,6 +32,7 @@ hd-install
 	+ added a gui installer - thanks for iphitus for doing most of the work!
 archie-scripts
 	+ added iso2usb script to install iso to a usb device
+	- removed support of beyond (r.i.p.)
 initscripts
 	+ updated to Arch 0.8 (Voodoo)
 	+ added aufs support (unionfs still supported)

@@ -524,6 +524,50 @@ init_archie()
 	return 0
 }
 
+# checking for nesting parameters - should do it _only_ after all devices has been set up
+check_nest_params()
+{
+	[ -z "$CMDLINE" ] && return 0
+	set $CMDLINE
+	while [ "$1" ]; do 
+		case $1 in 
+			username=*)
+				USERNAME=$username
+				;;
+			homenest=*) 
+				HOMENEST=$homenest
+				if [ -z "$HOMENEST" ]; then
+					/usr/bin/chvt 1
+					printhl "Home nesting allows you to use a target partition to save changed files"
+					printhl "from your Archie /home directory."
+					printhl "Please specify the partition you wish to use as your home nesting from"
+					printhl "one of the followings partitions or press [ENTER] to skip."
+					printhl "Available partitions: `ls /dev/[h,s]d*`"
+					printhl "(This should be only done once - Archie will detect your nested partition"
+					printhl "automatically on each boot)."
+					read $HOMENEST
+				fi
+				;;
+			rootnest=*) 
+				ROOTNEST=$rootnest
+				if [ -z "$ROOTNEST" ]; then
+					/usr/bin/chvt 1
+					printhl "Root nesting allows you to use a target partition to save changed files"
+					printhl "from the entire Archie system."
+					printhl "Please specify the partition you wish to use as your root nesting from"
+					printhl "one of the followings partitions or press [ENTER] to skip."
+					printhl "Available partitions: `ls /dev/[h,s]d*`"
+					printhl "(This should be only done once - Archie will detect your nested partition"
+					printhl "automatically on each boot)."
+					read $ROOTNEST
+				fi
+				;;
+		esac
+		shift
+	done
+	[ -z "$USERNAME" ] && USERNAME="$DEFAULT_USERNAME"
+}
+
 # parsing command line parameters
 parse_cmdline()
 {
@@ -559,8 +603,7 @@ parse_cmdline()
 				;;
 			initrdcli*) 
 				INITRDCLI="yes"
-				# to be on the safe side, we change bootsplash mode into 
-				# verbose to see messages...
+				# to be on the safe side, we change bootsplash mode into verbose to see messages...
 				#echo "verbose" > /proc/splash
 				/usr/bin/chvt 1
 				;;
@@ -569,27 +612,6 @@ parse_cmdline()
 				# user will be prompted for a password
 				#echo "verbose" > /proc/splash
 				/usr/bin/chvt 1
-				;;
-			username=*)
-				USERNAME=$username
-				;;
-			homenest=*) 
-				HOMENEST=$homenest
-				# TODO: prompt for homenest & username if blank
-				if [ -z "$HOMENEST" ]; then
-					printhl "Home nesting allows you to use a directory on a target partition as your /home directory."
-					printhl "All changed files under /home while using Archie will be saved to this directory."
-					printhl "Please specify the partition you wish to use as your home nesting:"
-					printhl "(This should be only done once - Archie will detect your nested partition automatically"
-					printhl "on each boot)."
-					read $HOMENEST
-				fi
-				[ -z "$USERNAME" ] && USERNAME="$DEFAULT_USERNAME"
-				;;
-			rootnest=*)
-				ROOTNEST=$rootnest
-				# TODO: prompt for rootnest & username if blank
-				[ -z "$USERNAME" ] && USERNAME="$DEFAULT_USERNAME"
 				;;
 			lang=*)
 				LANG=$lang
@@ -606,19 +628,17 @@ parse_cmdline()
 			boot=*)
 				BOOT=$boot
 				;;
-			gfx=*)
-				GFX=$gfx
 		esac
 		shift
 	done
-	unset CMDLINE
 }
 
 # finally we move control to hosted Arch linux! :-)
 start_host_system()
 {
 	# making sure we have those paths ready for use...
-	[ ! -d /mnt/liveroot/tmp ] && mkdir -p /mnt/liveroot/tmp && chmod 1777 /mnt/liveroot/tmp
+	[ ! -d /mnt/liveroot/tmp ] && mkdir -p /mnt/liveroot/tmp
+	chmod 1777 /mnt/liveroot/tmp
 	[ ! -d /mnt/liveroot/var/log ] && mkdir -p /mnt/liveroot/var/log
 	#mkdir -p /mnt/liveroot/dev
 	#mkdir -p /mnt/liveroot/sys
@@ -630,14 +650,14 @@ start_host_system()
 	echo "$PRINTK" >/proc/sys/kernel/printk
 
 	# Check for any change to default runlevel
-	for x in `cat /proc/cmdline`; do
+	for x in "$CMDLINE"; do
 		case "${x}" in
 			[0123456Ss])
 				init_arg=${x}
 				;;
 		esac
 	done
-	initcmd=`cat /proc/cmdline | awk -Finit= '{print $2}' | awk '{print $1}'`
+	initcmd=`echo $CMDLINE | awk -Finit= '{print $2}' | awk '{print $1}'`
 	[ "${initcmd}" == "" ] && initcmd="/sbin/init";
 
 	# clean mounts

@@ -4,7 +4,7 @@
 #
 
 # source splash-functions
-. /etc/rc.d/splash-functions
+. /etc/rc.d/gensplash-functions
 
 STAT_COL=$[`stty size | awk 'BEGIN { RS=" " }; END { print $1 }'` - 13]
 

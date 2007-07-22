@@ -78,7 +78,8 @@ scan_parameters()
 	# getting command line parameter(s)
 	while [ "$#" -gt "0" ]; do
 		case "$1" in
-			-h|-?|--help)
+			-h|--help)
+				echo ":: $1"
 				usage
 				;;
 			-q|--quiet)
@@ -313,7 +314,7 @@ check_unionfs()
 	elif [ $(modprobe -l | grep aufs.ko) ]; then
 		modprobe -f aufs
 		if [ $? -ne 0 ] ; then
-			echo "  : Failed to insert aufs module.  Please check your configuration."
+			echo "  : Failed to load aufs module.  Please check your configuration."
 			echo "  : Check 'dmesg | tail' for further information."
 			return 1
 		fi
@@ -321,16 +322,16 @@ check_unionfs()
 	elif [ $(modprobe -l | grep unionfs.ko) ]; then
 		modprobe -f unionfs
 		if [ $? -ne 0 ] ; then
-			echo "  : Failed to insert unionfs module.  Please check your configuration."
+			echo "  : Failed to load unionfs module.  Please check your configuration."
 			echo "  : Check 'dmesg | tail' for further information."
 			return 1
 		fi
 		unionfs=unionfs
 		return 0
 	else
-		echo "  : The kernel you are running does not appear to have unionfs enabled."
-		echo "  : Please install the appropriate aufs or unionfs  module pkg for your"
-		echo "  : kernel or install the aufs-auto pkg (pacman -S aufs-auto) to"
+		echo "  : The kernel you are running does not appear to have aufs/unionfs enabled."
+		echo "  : Please install the appropriate aufs or unionfs module package for your"
+		echo "  : kernel or install the aufs-auto-cvs package (pacman -S aufs-auto-cvs) to"
 		echo "  : build and install the module for your kernel"
 		return 1
 	fi
@@ -366,6 +367,7 @@ init_archie()
 
 format_target()
 {
+	[ -d $target ] && return
 	echo -e "$C_OTHER$PREFIX_HL ${C_FAIL}Are you sure you want to format and install Arch linux on ${C_H1}$target${C_FAIL} ? [y/N] ${C_CLEAR}\c "
 	read key
 	if [ -z $key ] || [ ! $key = 'y' -a ! $key = 'Y' ]; then
@@ -469,7 +471,10 @@ check_pkgs_to_install()
 		fi
 	done
 	for pkg in $chkpkglist; do
-		[ -z "`pacman -Q $pkg -r $archroot 2>/dev/null`" ] && echo "$pkg "
+		for ignorepkg in $ignorepkglist; do
+			[ "$ignorepkg" = "$pkg" ] && break
+		done
+		[ "$ignorepkg" != "$pkg" ] && [ -z "`pacman -Q $pkg -r $archroot 2>/dev/null`" ] && echo "$pkg "
 	done
 }
 
@@ -540,9 +545,13 @@ prepare_archie()
 	
 	# copying kernel
 	mkdir -p $workdir/archieiso/boot >/dev/null 2>&1
-	vmlinuz=$workdir/archieroot/boot/vmlinuz26beyond
-	[ ! -f $vmlinuz ] && vmlinuz=$archroot/boot/vmlinuz26beyond
-	cp $vmlinuz $workdir/archieiso/boot/vmlinuz
+	#vmlinuz=$workdir/archieroot/boot/vmlinuz26beyond
+	#[ ! -f $vmlinuz ] && vmlinuz=$archroot/boot/vmlinuz26beyond
+	#cp $vmlinuz $workdir/archieiso/boot/vmlinuz
+
+	# FIXME:
+	# this should be corrected in the kernel26archie PKGBUILD
+	mv $workdir/archieroot/tmp/vmlinuz26archie $workdir/archieiso/boot/vmlinuz
 
 	# backing-up Arch configuration files to be overwritten with Archie files
 	cp $archroot/etc/rc.d/functions $workdir/archieroot/etc/rc.d/functions.arch
@@ -610,6 +619,11 @@ prepare_archie()
 
 	# doing cleanning up here instead of in rc.sysinit
 	/bin/rm -f $workdir/archieroot/{etc/nologin,etc/shutdownpid,var/lock/*,forcefsck} >/dev/null 2>&1
+	# FIXME:
+	# need to fix/change this in the kernel26archie PKGBUILD...
+	# we're copying the files because we delete the archieroot/tmp folder... :\
+	mv $workdir/archieroot/tmp/{squashfs.ko,aufs.ko} $workdir/tmp/
+
 	/bin/rm -rf $workdir/archieroot/tmp/{*,.*} >/dev/null 2>&1
 	[ -d $workdir/archieroot/var/run ] && (cd $workdir/archieroot/var/run && find . ! -type d -exec rm -f -- {} \; )
 	#: > $workdir/archieroot/var/run/utmp
@@ -663,10 +677,14 @@ create_initramfs()
 	cp $kernel_dir/zlib_inflate.ko $initrddir/modules/
 	check_kernel_dir "fs"
 	cp $kernel_dir/mbcache.ko $initrddir/modules/
-	for mod in {squashfs,aufs,unionfs,fat,vfat,msdos,ntfs,jbd,ext2,ext3,reiserfs,reiser4,jfs,xfs,isofs,udf}; do
+	for mod in {unionfs,fat,vfat,msdos,ntfs,jbd,ext2,ext3,reiserfs,jfs,xfs,isofs,udf}; do
 		check_kernel_dir "fs/$mod"
 		cp $kernel_dir/$mod.ko $initrddir/modules/
 	done
+	# FIXME:
+	# this should be corrected in the kernel26archie PKGBUILD
+	mv $workdir/tmp/{squashfs.ko,aufs.ko} $initrddir/modules/
+
 	#check_kernel_dir "fs/squashfs"
 	#cp $kernel_dir/unlzma.ko $initrddir/modules/
 	#cp $kernel_dir/sqlzma.ko $initrddir/modules/
@@ -694,7 +712,7 @@ add_gensplash()
 	# lets check the kernel config which is installed on archieroot
 	mount -t $unionfs -o dirs=$workdir/archieroot=rw:$archroot=ro none $workdir/archieroot
 	[ $? -ne 0 ] && return 1
-	config_file=`pacman -r $workdir/archieroot -Ql kernel26beyond | grep '\.config' | awk '{print $2}'`
+	config_file=`pacman -r $workdir/archieroot -Ql kernel26archie | grep '\.config' | awk '{print $2}'`
 	if [ ! -z "`grep "CONFIG_FB_VESA_TNG=y" $config_file`" ]; then
 		splashinfo="video=vesafb:ywrap,mtrr,$splashres-16@60 console=tty1 splash=$splashvox,theme:$splashtheme"
 	else
@@ -775,7 +793,7 @@ create_squashfs_image()
 	# finally making the squashfs image
 	[ "$quiet" == "yes" ] && noprogress="-no-progress > /dev/null" || noprogress=""
 	[ "$lzma" == "no" ] && mksqopt="-nolzma" || mksqopt=""
-	mksquashfs $workdir/archieroot/ $workdir/archieiso/archie.sqf "$mksqopt" -always-use-fragments -e $ignoredirs $noprogress
+	mksquashfs $workdir/archieroot/ $workdir/archieiso/archie.sqf $mksqopt -always-use-fragments -e $ignoredirs $noprogress
 	#mksquashfs $archroot/ $workdir/archieroot/ $workdir/archieiso/archie.sqf -no-duplicates -e $ignoredirs > /dev/null
 	[ $? -ne 0 ] && return 1
 	umount $workdir/archieroot -t $unionfs
@@ -1010,3 +1028,6 @@ cleanup
 echo
 printhl "Completed successfully."
 #printhl "tip: use qemu to test your iso without burning it: qemu -m 512 -boot d -cdrom $isoname"
+
+# gunzip initram.gz
+# cpio -idmv initram 
