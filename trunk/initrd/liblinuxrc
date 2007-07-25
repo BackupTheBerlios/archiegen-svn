@@ -650,7 +650,7 @@ start_host_system()
 	echo "$PRINTK" >/proc/sys/kernel/printk
 
 	# Check for any change to default runlevel
-	for x in "$CMDLINE"; do
+	for x in $CMDLINE; do
 		case "${x}" in
 			[0123456Ss])
 				init_arg=${x}
