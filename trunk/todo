@@ -1,10 +1,11 @@
-- change all archie-module-xxx to /usr/share/archie/modules
-- check all archie-module-xxx and archie-customization-xxx packages
++ change all archie-module-xxx to /usr/share/archie/modules
++ check all archie-module-xxx and archie-customization-xxx packages
 - put iso2usb on the site
-- make gensplashutils optional - if not installed, only download (like in busybox) and install to jail only, and
++ CANCELED:: (1st replace gensplash...) : make gensplashutils optional - if not installed, only download (like in busybox) and install to jail only, and
   use the procedure to copy the needed files properly (from jail OR from / )
 - create readahead list for each customization!
 - finish beryl (customization & autostart)
 + change from beyond to our own kernel
 + add "gspcav1 spca5xx" (webcams) modules - CANCEL BECAUSE MODULE PACKAGES ARE NOT UPDATED...
+- check xorg template replacement
 

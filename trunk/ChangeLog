@@ -25,6 +25,10 @@ mkliveiso
 	+ added grub as default iso bootloader (for syslinux use --syslinux)
 	+ added mbcache.ko (it's absence prevented fs modules to load on initrd)
 	+ moved locales generation to mkliveiso
+	+ fixed init_arg in liblinuxrc 
+	+ fixed gensplash in initramfs
+	+ fixed gensplash flicker (thanks to kano from Arch forums)
+	- removed VESA_TNG lookup
 hd-install
 	+ added grub installation option
 	+ added files counter

@@ -710,23 +710,25 @@ add_gensplash()
 {
 	[ -z "${splashvox}" ] && splashvox="silent"
 	# lets check the kernel config which is installed on archieroot
-	mount -t $unionfs -o dirs=$workdir/archieroot=rw:$archroot=ro none $workdir/archieroot
-	[ $? -ne 0 ] && return 1
-	config_file=`pacman -r $workdir/archieroot -Ql kernel26archie | grep '\.config' | awk '{print $2}'`
-	if [ ! -z "`grep "CONFIG_FB_VESA_TNG=y" $config_file`" ]; then
-		splashinfo="video=vesafb:ywrap,mtrr,$splashres-16@60 console=tty1 splash=$splashvox,theme:$splashtheme"
-	else
-		splashinfo="vga=791 console=tty1 splash=$splashvox,theme:$splashtheme"
-	fi
-	umount $workdir/archieroot
+	# no need for that anymore since we're not using VESA_TNG anymore
+	#mount -t $unionfs -o dirs=$workdir/archieroot=rw:$archroot=ro none $workdir/archieroot
+	#[ $? -ne 0 ] && return 1
+	#config_file=`pacman -r $workdir/archieroot -Ql kernel26archie | grep '\.config' | awk '{print $2}'`
+	#if [ ! -z "`grep "CONFIG_FB_VESA_TNG=y" $config_file`" ]; then
+	#	splashinfo="video=vesafb:ywrap,mtrr,$splashres-16@60 console=tty1 splash=$splashvox,theme:$splashtheme,kdgraphics,tty:8"
+	#else
+		splashinfo="vga=791 console=tty1 splash=$splashvox,theme:$splashtheme,kdgraphics,tty:8"
+	#fi
+	#umount $workdir/archieroot
 
 	# not using splash_geninitramfs since we need to make sure theme files are also
 	# copied to target Arch system
 	#splash_geninitramfs -r $splashres -a $workdir/archieiso/boot/initram.gz $splashtheme
 
-	mkdir -p $initrddir/{bin,sbin,usr/{bin,sbin}}
+	#mkdir -p $initrddir/{bin,sbin,usr/{bin,sbin}}
+	mkdir -p $initrddir/{dev/fb,dev/misc,dev/vc,lib/splash/proc,root,sbin,lib/splash/sys}
 	cp /sbin/splash_helper ${initrddir}/sbin
-	cp /sbin/splash_helper $workdir/archieroot/sbin
+	#cp /sbin/splash_helper $workdir/archieroot/sbin
 	mkdir -p ${initrddir}/etc/splash/$splashtheme/images
 	mkdir -p $workdir/archieroot/etc/splash/$splashtheme/images
 	cp /etc/splash/$splashtheme/$splashres.cfg ${initrddir}/etc/splash/$splashtheme/
