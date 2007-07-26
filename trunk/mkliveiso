@@ -549,9 +549,7 @@ prepare_archie()
 	#[ ! -f $vmlinuz ] && vmlinuz=$archroot/boot/vmlinuz26beyond
 	#cp $vmlinuz $workdir/archieiso/boot/vmlinuz
 
-	# FIXME:
-	# this should be corrected in the kernel26archie PKGBUILD
-	mv $workdir/archieroot/tmp/vmlinuz26archie $workdir/archieiso/boot/vmlinuz
+	mv $workdir/archieroot/boot/vmlinuz26archie $workdir/archieiso/boot/vmlinuz
 
 	# backing-up Arch configuration files to be overwritten with Archie files
 	cp $archroot/etc/rc.d/functions $workdir/archieroot/etc/rc.d/functions.arch
@@ -619,11 +617,6 @@ prepare_archie()
 
 	# doing cleanning up here instead of in rc.sysinit
 	/bin/rm -f $workdir/archieroot/{etc/nologin,etc/shutdownpid,var/lock/*,forcefsck} >/dev/null 2>&1
-	# FIXME:
-	# need to fix/change this in the kernel26archie PKGBUILD...
-	# we're copying the files because we delete the archieroot/tmp folder... :\
-	mv $workdir/archieroot/tmp/{squashfs.ko,aufs.ko} $workdir/tmp/
-
 	/bin/rm -rf $workdir/archieroot/tmp/{*,.*} >/dev/null 2>&1
 	[ -d $workdir/archieroot/var/run ] && (cd $workdir/archieroot/var/run && find . ! -type d -exec rm -f -- {} \; )
 	#: > $workdir/archieroot/var/run/utmp
@@ -677,17 +670,12 @@ create_initramfs()
 	cp $kernel_dir/zlib_inflate.ko $initrddir/modules/
 	check_kernel_dir "fs"
 	cp $kernel_dir/mbcache.ko $initrddir/modules/
+	cp $kernel_dir/squashfs.ko $initrddir/modules/
+	cp $kernel_dir/aufs.ko $initrddir/modules/
 	for mod in {unionfs,fat,vfat,msdos,ntfs,jbd,ext2,ext3,reiserfs,jfs,xfs,isofs,udf}; do
 		check_kernel_dir "fs/$mod"
 		cp $kernel_dir/$mod.ko $initrddir/modules/
 	done
-	# FIXME:
-	# this should be corrected in the kernel26archie PKGBUILD
-	mv $workdir/tmp/{squashfs.ko,aufs.ko} $initrddir/modules/
-
-	#check_kernel_dir "fs/squashfs"
-	#cp $kernel_dir/unlzma.ko $initrddir/modules/
-	#cp $kernel_dir/sqlzma.ko $initrddir/modules/
 
 	if [ "$copyusb" = "yes" ]; then
 		check_kernel_dir "drivers/usb"
@@ -995,7 +983,10 @@ if [ "$buildiso" ]; then
 	
 fi
 
-[ ! -z "$install2arch" ] && status "Installing selected packages to target ($target)" pacman_remote $archroot "$install2arch"
+if [ ! -z "$install2arch" ]; then
+	status "Installing selected packages to target ($target)" pacman_remote $archroot "$install2arch"
+	[ $? -ne 0 ] && fail
+fi
 
 # making sure fonts are cached properly... maybe this should be done somewhere else?
 # do we need fontconfig for this?
