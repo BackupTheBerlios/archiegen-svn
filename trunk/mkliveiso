@@ -652,6 +652,8 @@ create_initramfs()
 	#kernel_dir="$workdir/archieroot/lib/modules/*/kernel"
 	#[ ! -d $workdir/archieroot/lib/modules/ ] && kernel_dir="$archroot/lib/modules/*/kernel"
 	# is this better?
+	check_kernel_dir "drivers/ide/pci"
+	cp $kernel_dir/piix.ko $initrddir/modules
 	check_kernel_dir "drivers/ide"
 	for mod in {ide-core.ko,ide-generic.ko,ide-disk.ko,ide-cd.ko}; do
 		cp $kernel_dir/$mod $initrddir/modules/
@@ -1022,5 +1024,3 @@ echo
 printhl "Completed successfully."
 #printhl "tip: use qemu to test your iso without burning it: qemu -m 512 -boot d -cdrom $isoname"
 
-# gunzip initram.gz
-# cpio -idmv initram 
