@@ -716,7 +716,7 @@ add_gensplash()
 	#splash_geninitramfs -r $splashres -a $workdir/archieiso/boot/initram.gz $splashtheme
 
 	#mkdir -p $initrddir/{bin,sbin,usr/{bin,sbin}}
-	mkdir -p $initrddir/{dev/fb,dev/misc,dev/vc,lib/splash/proc,root,sbin,lib/splash/sys}
+	mkdir -p $initrddir/{dev/fb,dev/misc,dev/vc,lib/splash/{proc,sys,cache},sbin}
 	cp /sbin/splash_helper ${initrddir}/sbin
 	#cp /sbin/splash_helper $workdir/archieroot/sbin
 	mkdir -p ${initrddir}/etc/splash/$splashtheme/images

@@ -511,6 +511,9 @@ init_archie()
 	# and make suspend2 shutup
 	[ -f /proc/suspend2/do_resume ] && echo 0 > /proc/suspend2/do_resume
 
+	for module in $LOAD_MODULES; do
+		insmod /modules/$module.ko >/dev/null 2>&1
+	done
 	for module in zlib_deflate zlib_inflate ide-core ide-generic ide-disk fat cdrom ide-cd \
 		unlzma sqlzma squashfs aufs unionfs sd_mod vfat msdos ntfs mbcache \
 		nls_cp437 nls_iso8859-1 nls_iso8859-2 jbd ext2 ext3 reiserfs reiser4 jfs xfs ; do
@@ -627,6 +630,9 @@ parse_cmdline()
 				;;
 			boot=*)
 				BOOT=$boot
+				;;
+			load_modules=*)
+				LOAD_MODULES=$load_modules
 				;;
 		esac
 		shift
