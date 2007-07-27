@@ -1,0 +1,72 @@
+#!/bin/sh
+
+# autogfx script by z4ziggy and dibblethewrecker
+# a wizard to detect gfx drivers and mount appropriate sqf file at Archie startup
+
+# list of legacy nvidia PCI IDs
+#big_list="0x0020 0x0028 0x0029 0x002C 0x002D 0x00A0 0x0100 0x0101 0x0103 0x0150 0x0151 0x0152 0x0153"
+
+LISTFILE=/tmp/lshwd.out
+# gfx packages list - changed by mkliveiso to reflect archie.conf parameters
+gfx_nvidia="nvidia-beyond nvidia-utils"
+gfx_nvidia_71xx="nvidia-71xx-beyond nvidia-71xx-utils"
+gfx_nvidia_96xx="nvidia-96xx-beyond nvidia-96xx-utils"
+gfx_ati="xinetd netkit-bsd-finger fglrx-beyond fglrx-utils"
+gfx_dri="libgl-dri"
+
+
+# check if lshwd output files are available already, execute lshwd if not
+if [ ! -a $LISTFILE ] || [ ! -a $XINFOTMP ]; then
+        lshwd -a -m > $LISTFILE
+fi
+
+#GFXCARD=$(awk -F\" '/VGA compatible controller/{print $4;exit}' $LISTFILE)
+XMODULE=$(awk -F\" '/VGA compatible controller/{print $6;exit}' $LISTFILE)
+
+unset install
+
+if [ -z $1 ] ; then
+	if [ "`echo $XMODULE | grep nv`" ] ; then
+		#for device in $big_list ; do
+		#	result=`udevinfo -a -p `udevinfo -q path -n /dev/gfx` | grep SYSFS{device}`
+		#	if [ $result == "    SYSFS{device}==\"$device\"" ] ; then
+		#		GFX="nvidia_legacy"
+		#		install=1
+		#	fi
+		#done
+		[ "${install}" != "1" ] && GFX="nvidia"
+	elif [ "`echo $XMODULE | grep ati`" ] ; then
+		GFX="ati"
+		# FIXME:
+		# we're not installing fglrx atm because of problems with beryl.
+		/bin/true
+		exit
+	else
+		if [ ! -z "`pacman -Q $gfx_dri 2>/dev/null`" ]; then
+			# don't install libgl-dri - it's already installed
+			/bin/true
+			exit
+		fi
+		GFX="dri"
+	fi
+else
+	GFX="${1}"
+fi
+
+#if [ -f /etc/archie/gfx/$GFX.sqf ]; then
+#	mkdir /mnt/gfx_card.tmp
+#	mount -o loop -r -t squashfs /etc/archie/gfx/$GFX.sqf /mnt/gfx_card.tmp
+#	# FIXME: this doesn't work, no idea why! 
+#	#mount -o remount,append:/mnt/gfx_card.tmp=ro /
+#	cp -a /mnt/gfx_card.tmp/* / >/dev/null 2>&1
+#	umount /mnt/gfx_card.tmp
+#	rm -r /mnt/gfx_card.tmp
+#
+#	#( cd / ; tar jxvf /etc/archie/gfx/$GFX.tar.bz2 >/dev/null 2>&1 )
+#fi
+
+mkdir -p /var/cache/pacman/pkg > /dev/null 2>&1
+eval gfxpkgs=\$gfx\_$GFX
+#for file in $gfxpkgs; do mv /etc/archie/gfx/$file* /var/cache/pacman/pkg; done
+[ ! -z "$gfxpkgs" ] && yes | pacman -S --noconfirm --cachedir /etc/archie/gfx/ $gfxpkgs
+

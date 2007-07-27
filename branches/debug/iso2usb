@@ -1,0 +1,113 @@
+#!/bin/sh
+#
+# iso2usb - copies Archie iso to a usb partition
+# version 0.0.1
+#
+# should run on most Linux distributions
+
+##############################################################################
+# some global variables
+##############################################################################
+
+C_OTHER="\033[1;34m"      # prefix & brackets
+C_FAIL="\033[1;31m"       # failed
+C_H1="\033[1;37m"         # highlight text 1
+C_CLEAR="\033[1;0m"
+PREFIX_HL=" >"
+#BS=1024000                # buffer size for 'dd' command
+BS=11174960
+
+##############################################################################
+# some functions
+##############################################################################
+
+# traps CTRL-C
+trap ctrl_c 2
+
+usage()
+{
+	echo "Usage:"
+	echo "  iso2usb <isofile> <partition>"
+	echo "Example:"
+	echo "  iso2usb archie.iso /dev/sdb1"
+	echo
+	echo "  <isofile>   = the iso file you wish to copy into the usb device"
+	echo "  <partition> = the usb partition you wish to install the iso file to"
+	echo ; exit
+}
+printhl() 
+{
+	echo -e "$C_OTHER$PREFIX_HL $C_H1$1$C_CLEAR "
+}
+ctrl_c()
+{
+	umount $mntusb $mntiso > /dev/null 2>&1
+	halt "CTRL-C detected - breaking off..."
+}
+halt()
+{
+	# clean up, to be sure we dont leave leftovers...
+	rm -f -r /mnt/iso2usb.{iso,usb}.tmp
+	echo -e "$C_OTHER$PREFIX_HL ${C_FAIL}$1$C_CLEAR "
+	echo ; exit
+}
+copy_progress()
+{
+	in_file=${1}
+	out_file=${2}
+	mkdir -p $(dirname "${out_file}")
+	filename=$(basename "${in_file}")
+	rm -f "${out_file}"
+	file_size=$(du -b "${in_file}" | cut -f1)
+	bytes_copied=0
+	skip=0
+	dd if="${in_file}" bs=$BS 2>/dev/null | while [ ${bytes_copied} -lt ${file_size} ]; do
+		dd bs=${BS} count=1 >> "${out_file}" 2>/dev/null
+		bytes_copied=$((bytes_copied+BS))
+		[ ${bytes_copied} -gt ${file_size} ] && perc=100 || perc=$(expr ${bytes_copied} \* 100 / ${file_size})
+		skip=$((skip+1))
+		echo -e -n "  copying "${filename}"  [${perc}%]\r"
+	done
+	echo -e -n "                                                                   \r"
+}
+
+##############################################################################
+# the program itself
+##############################################################################
+
+printhl "iso2usb - installs bootloader (grub) and iso file to a usb device\n"
+[ "$#" != 2 ] && usage
+mntusb=/mnt/iso2usb.usb.tmp
+mntiso=/mnt/iso2usb.iso.tmp
+[ "`id -u`" != "0" ] &&  halt "You must use iso2usb as root or using sudo. Aborting..."
+isofile="$1"
+device="$2"
+[ ! -f "$isofile" ] && halt "No such file: $isofile, aborting..."
+[ ! -b "$device" ] && halt "Could not find partition: $device, aborting..."
+
+# make sure the device is not mounted
+umount $device >/dev/null 2>&1
+[ "`grep $device /proc/mounts`" ] && halt "Device $device could not be umounted. Aborting..."
+# mount isofile and device
+mkdir -p $mntusb $mntiso >/dev/null 2>&1
+mount $device $mntusb
+[ $? != 0 ] && halt "Device $device could not be mounted. Aborting..."
+mount -o loop $isofile $mntiso
+printhl "Installing grub"
+if [ `which grub-install 2> /dev/null ` ]; then
+	grub-install --root-directory=$mntusb --no-floppy --recheck $device
+else
+	echo -e "$C_OTHER$PREFIX_HL ${C_FAIL}Warning: not installing bootloader - could not find grub-install$C_CLEAR "
+fi
+printhl "Copying iso contents, this will take sometime..."
+#cp -r $mntiso/* $mntusb/
+for file in `(cd $mntiso ; find * -type f)`; do
+	#dd if=$mntiso/$file of=$mntusb/$file >/dev/null 2>&1
+	copy_progress "$mntiso/$file" "$mntusb/$file"
+done
+rm -f $mntusb/boot.catalog
+printhl "Umounting $device"
+umount $mntusb $mntiso
+rm -f -r /mnt/iso2usb.{iso,usb}.tmp
+# finito la comedia
+printhl "Done."

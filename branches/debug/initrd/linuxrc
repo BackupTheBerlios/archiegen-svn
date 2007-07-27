@@ -1,0 +1,63 @@
+#!/bin/busybox sh
+
+###############################################################################
+##
+# Archie startup script (linuxrc) by z4ziggy, 2005-2007
+# change as you like, just dont blame me...
+#
+# code is heavily commented, for archie is a work in progress.
+# hope those comments will prove themselves usefull too ;)
+#
+# this code is under the GPL license.
+##
+###############################################################################
+
+version=0.6
+# using linuxrc functions library
+. /liblinuxrc
+
+###############################################################################
+## variables
+# boot type(s) : default scan-type order, can be changed via cmdline
+BOOT="ide scsi usb firewire"
+# boot device used on boot (/dev/hda1, etc)
+BOOTDEV=""
+# skip into shell in ramdrive
+INITRDCLI="no"
+
+###############################################################################
+## party on!
+
+# MUST be 1st thing we do to have ALL busybox commands!
+init_busybox
+
+printhl "Archie v$version $C_OTHER(${C_H2}Vika$C_OTHER)$C_H1, by z4ziggy at user-contributions.org\n"
+status "Setting up environment" init_archie
+parse_cmdline
+
+# scanning for boot device according to BOOT order :)
+for BOOTTYPE in $BOOT; do
+	[ -z "$BOOTDEV" ] && status "Scanning ${BOOTTYPE} partitions" scan_${BOOTTYPE}_devices
+done
+[ -z "$BOOTDEV" ] && skip_to_shell "Could not find Archie image, escaping into busybox shell (initrd)"
+
+# collect swaps information to insert into fstab
+status "Scanning for swaps" scan_for_swaps
+
+# copy squashfs image to ram if requested so
+[ "$COPY2RAM" = "yes" ] && status "Copying Archie image to memory" copy_archie_to_ram
+
+# check for nesting command line parameters
+check_nest_params
+# lets make proper root structure (have i mentioned i love unionfs? :-)
+status "Preparing host system " make_union_root
+[ ! -z "$ROOTNEST" ] && printhl "Using root nesting on $ROOTNEST"
+[ ! -z "$HOMENEST" ] && printhl "Using home nesting on $HOMENEST"
+
+# check if we were requested to drop into initrd shell
+[ "$INITRDCLI" = "yes" ] && skip_to_shell "Dropping into busybox shell (initrdcli), press [CTRL-D] to continue boot"
+
+printhl "Starting hosted system" && start_host_system
+# and start pivot_root with our new live-root! <-- obsolete...
+#pivot_root /mnt/liveroot /mnt/liveroot/initrd
+

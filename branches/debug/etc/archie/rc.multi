@@ -1,0 +1,49 @@
+#!/bin/sh
+#
+# /etc/archie/rc.multi
+#
+
+. /etc/rc.conf
+. /etc/rc.d/functions
+
+load_vars PROGRESS DELTA NUMBER
+splash_setup
+
+# I doubt if this is needed for live operation...
+# Load sysctl variables if sysctl.conf is present
+#[ -r /etc/sysctl.conf ] && /sbin/sysctl -q -p &>/dev/null
+
+# checking if we need to disable network
+check_bootparam "nodhcp" && chmod -x /etc/rc.d/network
+
+# Start daemons
+for daemon in "${DAEMONS[@]}"; do
+	if [ "$daemon" = "${daemon#!}" ]; then
+		if [ "$daemon" = "${daemon#@}" ]; then
+			export DAEMONSTATE=NORM
+			/etc/rc.d/$daemon start
+			[ "$SPLASH_MODE_REQ" == "silent" ] && update_progress
+		else
+			export DAEMONSTATE=BKGD
+			stat_bkgd "Starting ${daemon:1}"
+			(/etc/rc.d/${daemon:1} start) &>/dev/null &
+			[ "$SPLASH_MODE_REQ" == "silent" ] && update_progress
+		fi
+	fi
+done
+
+# restore network daemon if was disabled...
+check_bootparam "nodhcp" && chmod +x /etc/rc.d/network
+
+# mount shfs mounts (if any) in fstab
+/bin/mount -a -t shfs
+
+if [ -x /etc/archie/rc.local ]; then
+	/etc/archie/rc.local
+fi
+
+# We should always exit gensplash!
+#[ "$RUNLEVEL" = "3" ] && /sbin/splash exit
+/sbin/splash exit
+
+# End of file

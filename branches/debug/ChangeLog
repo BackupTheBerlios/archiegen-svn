@@ -1,0 +1,371 @@
+     _          _    _
+    /_\  _ _ __| |_ (_)___
+   / _ \| '_/ _| ' \| / -_)
+  /_/ \_\_| \__|_||_|_\___| v0.6 - Vika
+
+  Arch Live Project, by Elia Yehuda, aka z4ziggy
+
+changelog:
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.6 [ Vika ]
+
+mkliveiso
+	+ added check for root
+	+ fixed umount of parent mount on cleanup
+	+ added --noextralive parameter to allow private iso builds without bloat
+	+ changed modules path to /usr/share/archie/modules
+	- removed --extrarepos parameter (no need for that anymore)
+	+ added --exec parameter to execute command/script before creating the iso
+	+ fixed skipping mkinitcpio on kernel install
+	+ added support for target as partition/imagefile/directory
+	+ recoded automatic gfx detection
+	+ added automatic vesa type detection for splash
+	+ added grub as default iso bootloader (for syslinux use --syslinux)
+	+ added mbcache.ko (it's absence prevented fs modules to load on initrd)
+	+ moved locales generation to mkliveiso
+	+ fixed init_arg in liblinuxrc 
+	+ fixed gensplash in initramfs
+	+ fixed gensplash flicker (thanks to kano from Arch forums)
+	- removed VESA_TNG lookup
+hd-install
+	+ added grub installation option
+	+ added files counter
+	+ fixed some bugs - should be usable by now...
+	+ added a gui installer - thanks for iphitus for doing most of the work!
+archie-scripts
+	+ added iso2usb script to install iso to a usb device
+	- removed support of beyond (r.i.p.)
+initscripts
+	+ updated to Arch 0.8 (Voodoo)
+	+ added aufs support (unionfs still supported)
+	+ added readahead support
+	- removed locales generation from startup (moved to mkliveiso)
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.6rc5 [ Vika ]
+
+archie-scripts
+	+ changed kde/xfce iso creation into modules (dtw)
+	+ added cli, e17 and busybox modules
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.6rc4 [ Vika ]
+
+initscripts
+	+ added locale and keymap support (dtw)
+	+ added automatic gfx detection (dtw)
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.6rc3 [ Vika ]
+
+linuxrc
+	+ added "exec" option to fstab entries
+	+ fixed partitions scanning (scsi/usb/firewire)
+	+ fixed nesting
+	+ using 8.3 filename squash image for dos16 
+archie-scripts
+	+ changed paths to follow actual linux paths standards
+	+ added archie.conf for easier configuration (tnx dtw)
+	- removed bootsplash (using gensplash instead)
+initscripts
+	+ updated to Arch 0.7.2 (Gimmick)
+hd-install
+	+ excluded /sys from installation
+	+ using kernel26-archie as default kernel
+	+ fixed modules array in rc.conf
+	+ various bug fixes and enhancments
+mkliveiso
+	+ restucted procedures
+	+ fixed copying usb modules to initrd
+	+ added --buildiso <type> for building xfce/kde iso
+	- removed --buildarchie (xfce only - obsolete)
+	+ added ability to use imgaefile as target-partition
+	- removed install2arch_packages.txt and install2archie_packages.txt
+	  (using archie.conf instead)
+	+ added --quiet option for less verbose output
+	+ using 8.3 filename squash image for dos16
+	+ fixed sudoers (mode 440)
+	+ fixed fonts (fc-cache)
+	+ replaced initrd with initramfs (for gensplash)
+	+ fixed unionfs check (dtw)
+	+ added [unstable] repository check (for xfce_packages)
+repository
+	+ added and updated repository packages
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.6rc2 [ Vika ]
+
+mkliveiso
+	+ removed auto-install of unionfs package to local system...
+	+ using install2arch_packages.txt and install2archie_packages.txt for
+	  easier iso creation (tnx dibblethewrecker)
+	+ using /usr/share/archie/custom for customized scripts (tnx dtw)
+	+ checking for [community] repository in pacman.conf (tnx dtw)
+rc.sysinit
+	+ setting sound volume control to 75% (tnx SG-3)
+repository
+	+ cleanup duplicate packages (using [community] repository)
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.6rc1 [ Vika ]
+
+mkliveiso
+	+ fixed some minor problems due to new NoUpgrade rules in pacman.conf
+	+ changing target-partition mount to readonly when possible
+Archie iso
+	+ updated look-n-feel
+repository
+	+ updated repository packages 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.5 [ - ]
+
+skipped version to sync with legacy distrowatch versioning.
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.4.5 [ MacGyver ]
+
+mkliveiso
+	+ fixed (yet again) execluded dir list on mksquashfs
+	  (hopefully this time it will stick...)
+Archie iso
+	+ new bootsplash theme (tnx Shadowhand)
+repository
+	+ updated repository packages 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.4.4 [ Nirvana ]
+
+mkliveiso
+	+ fixed execluded dir list on mksquashfs
+	+ excluding /var/cache/{pacman,man} only from /var/cache dir
+	+ using unionfs to emulate final live direcory (archieroot and 
+	  archroot) when installing to jail and when creating squashfs image
+	  (this solves the ugly /usr/bin/gaim fix on rc.sysinit :-)
+	+ fixed missing files due to NoUpgrade rule from pacman.conf
+	+ added new modules support (see package list)
+linuxrc
+	+ added "ivman" cheatcode (adds "dbus,hal,ivman" to DAEMONS array)
+	+ disabling autofstab-entries on ivman use
+	+ adjusted squashfs image mount to one dir
+	+ fixed our easter egg...
+rc.conf
+	- disabled "portmap,fam" in DAEMONS array (*cough*)
+Archie iso
+	+ replaced mozilla-thunderbird with sylpheed-gtk2
+	+ added kernel26-archie PKGBUILD for custom kernel installation
+repository
+	+ updated repository packages 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.4.3 [ Beam me up Scotty ]
+
+mkliveiso
+	+ fixed target_partition parameter position
+	+ fixed cleanup procedure (scans for hanging mounts)
+	+ using unionfs when installing packages to jail :-)
+linuxrc
+	+ added shfs support (cheatcode: shfs=user@server:mountpoint)
+	+ fixed scsi probe and some code cleanup
+	+ added copy2ram cheatcode (not tested yet)
+	+ changed home nesting to /home
+	+ optimized BOOTTYPE scanner (ide/scsi/usb/firewire)
+	+ added username to nesting signatures
+mkxcfg
+	+ renamed "video" cheatcode to "xvideo" ("video" is a kernel
+	  parameter...)
+	+ new cheatcodes : xdepth, vrefresh, hsync, wheel, nowheel
+	+ code cleanup
+rc.conf
+	+ enabled "portmap,fam" in DAEMONS array
+rc.sysinit
+	+ added live-user creation for nesting
+	- removed redundant devfs mounting
+	+ changed udev to use udevsend instead of hotplug (tnx h3k)
+	+ restored hwclock (hw to system)
+rc.shutdown
+	- removed hwclock (system to hw)
+	+ eject cd on shutdown (not tested) and "noeject" cheatcode
+archie_menu
+	+ updated syslinux startup menu (com32, cheatcodes and enhancments)
+buildarchie
+	+ using etc/skel for customization files (for live-user creation)
+	+ added Clearlooks-Archie theme to match Archie colors
+	+ converted all themable files into packages (less bloat)
+Archie iso
+	+ added archie-scripts package - users can now create their own iso
+	  from Archie
+	+ login using username if specified, "archie" as default
+repository
+	+ updated repository packages 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.4.2 [ Stardust ]
+
+mkliveiso
+	+ some code cleanup and optimizations
+	+ fixed pacman_wrapper to skip non-directories in /var/lib/pacman
+	+ changed ignorepackages in --installarch from "lilo" to "devfsd"...
+	+ fixed overwritting /etc/inittab when using --buildarchie
+	+ --buildarchie now installs packages to _target_ partition
+linuxrc
+	+ using "uid/gid" for fat/ntfs/dos only, and "user,defaults" for the
+	  rest in fstab 
+	+ fixed LANG/LANGUAGE mixup...
+	+ added keymap="xx" cheatcode (optional to language="xx") (patching
+	  keymap in rc.conf)
+mkxcfg
+	+ added keymap="xx" cheatcode (optional to language="xx") (changing
+	  XkbLayout in X conf)
+	+ fixed nodeadkeys for "us" language
+	+ fixed video selection most-stupid-bug-ever
+hd-install
+	+ replaced dirsync with rsync (much more configurable)
+Archie iso
+	+ fixed sound issue (hotplug...)
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.4.1 [ Time to prove you're worth a damn x2 ]
+
+mkliveiso
+	+ using archie_packages.txt in --buildarchie
+build_archie
+	+ updated private xfce config
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.4 [ Time to prove you're worth a damn ]
+
+mkliveiso
+	+ fixed pacman wrapper to allow dependencies
+	- removed archie/inittab and patching /etc/inittab in live root instead
+	- removed archie/pacman.conf and using default instead
+	+ changed pacman wrapper to mount _all_ repositories directories
+	+ added new bootsplash theme and startup logo (default=archie) (tnx
+	  ShadowHand and iphitus)
+	+ added --buildarchie to create Archie iso
+	+ added --ignoredirs to allow skipping directories from final iso
+	+ added --nofirewire parameter to skip firewire modules in linuxrc
+	- removed devfs support - we going mainstream now... (using whatever is
+	  installed)
+	+ finally added some error checking...
+	+ fixed ugly "hanging mounts" behavior (exit-on-error)
+rc.multi
+	- removed fastboot (using background as in rc.multi from Arch
+	  initscripts)
+	+ allowing no network-start on startup (cheatcode: nodhcp)
+linuxrc
+	+ added language support (patching /etc/profile on boot) (cheatcodes:
+	  language="xx" AND lang="xx")
+	+ added firewire support (tnx iphitus)
+mkxcfg
+	+ added language support (cheatcode: language="xx")
+	+ added video mode selection (cheatcode: video="xx")
+archie_menu.com
+	+ added syslinux boot-menu program (dos .com program :-)
+hd-install
+	+ added archie/hd-install script - congrat ;)
+xorg.conf.template
+	+ changed keyboard driver to "kbd" and commented out speedo stuff
+PKGBUILD
+	+ added /usr/share/archie backup
+Archie iso
+	+ new and updated packages, (kernel 2.6.11-7)
+repository
+	+ updated repository packages 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.3.1 [ - ]
+
+mkliveiso
+	+ fixed bootsplash bug (tnx SG-3) 
+repository
+	+ updated repository packages 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.3 [ - ]
+
+mkliveiso
+	+ added pacman wrapper to hopefully save us from hanging mounts... 
+	+ added bootsplash support and --splashtheme parameter to allow
+	  alternate theme (default=ArchPool) 
+	+ added --tmp parameter to use /tmp while creating iso 
+	+ added --nousb parameter to skip usb modules in linuxrc 
+	+ added --install2arch parameter to install packages into target Arch
+	  system
+	+ added --install2archie parameter to install packages into live system
+	  (iso)
+linuxrc
+	+ added liblinuxrc for more structured and clean code 
+	+ added usb support (not tested yet) 
+	+ fixed nesting disks bug 
+	- removed devfs support (using /sys now) 
+	+ added nestsearch=yes/no cheatcode to disable nest-search 
+	+ added boot=cdrom/usb/scsi cheatcode to force boot type 
+	+ unified with Arch messages format 
+	+ renamed nesting cheatcodes from homepart/rootpart to
+	  homenest/rootnest 
+inittab
+	+ default to 5 (now u can change it when on rootnest) instead of boot
+	  cmdline 
+rc.sysinit
+	+ added pcmcia support (cardmgr) and pcmcia cheatcode 
+	+ removed clock setting (temp - to be fixed) 
+Archie iso
+	+ various changes in init scripts and Arch configurations 
+	+ performance boost and new packages 
+archie-scripts
+	- removed .archie extension from files (dir name is sufficient...) 
+repository
+	+ updated repository packages 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.2 [ 1st public release ]
+
+linuxrc
+	+ added nesting support 
+	+ added swap and pagefile.sys support 
+mkliveiso
+	+ added --archieconf parameter to allow alternate Archie configuration
+	  scripts 
+Archie iso
+	+ various changes in init scripts and Arch configurations 
+repository
+	+ added packages repository 
+
+
+ _  _____ ____
+| |/ / -_) __/
+|___/\__/_/ 0.1 [ private release for testing only ]
+

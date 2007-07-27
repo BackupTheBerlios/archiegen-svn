@@ -1,0 +1,33 @@
+#
+# /etc/inittab
+#
+
+#  Runlevels:
+#    0    Halt
+#    1(S)	Single-user
+#    2    Not used
+#    3    Multi-user
+#    4    Not used
+#    5    X11
+#    6    Reboot
+
+id:5:initdefault:
+
+rc::sysinit:/etc/archie/rc.sysinit
+rs:S1:wait:/etc/archie/rc.single
+rm:2345:wait:/etc/archie/rc.multi
+#rm:2345:once:/etc/archie/rc.multi
+rh:06:wait:/etc/archie/rc.shutdown
+su:S:wait:/sbin/sulogin -p
+
+c1:2345:respawn:/sbin/agetty 38400 vc/1 linux
+c2:2345:respawn:/sbin/agetty 38400 vc/2 linux
+c3:2345:respawn:/sbin/agetty 38400 vc/3 linux
+
+ca::ctrlaltdel:/sbin/shutdown -t3 -r now
+
+#x:5:respawn:/usr/X11R6/bin/xdm -nodaemon
+#x:5:respawn:/opt/kde/bin/kdm -nodaemon
+x:5:once:/etc/archie/xautostart
+
+# End of file

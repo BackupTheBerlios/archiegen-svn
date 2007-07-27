@@ -1,0 +1,23 @@
+# Author: Michal Januszewski <spock@gentoo.org>
+# Ported to Arch by dibblethewrecker <dibblethewrecker.at.jiwe.dot.org>
+
+# Config file for splashutils from splashutils-arch
+
+# which theme to use, probably best left commented (the theme specified
+# on the kernel command line is used)
+#SPLASH_THEME="archie"
+
+# on which ttys should fbsplash be enabled? defaults to RC_TTY_NUMBER
+#SPLASH_TTYS="1 2 3 4 5 6"
+
+# what font to use? defaults to what fbtruetype uses
+#SPLASH_FONT="/usr/X11R6/lib/X11/fonts/TTF/vera.ttf"
+
+# boot/reboot/shutdown message overrides
+SPLASH_BOOT_MESSAGE="Booting Archie Live-CD env (\$progress%)... Press F2 for verbose mode"
+#SPLASH_REBOOT_MESSAGE="Rebooting the system"
+#SPLASH_SHUTDOWN_MESSAGE="Shutting the system down"
+
+# allows to set different themes on different consoles
+# format: "<console>:<theme> <console>:<theme> (...)"
+#SPLASH_TTY_MAP="1:emergence 2:ArchPool"

@@ -1,0 +1,680 @@
+#!/bin/sh
+
+###############################################################################
+##
+# Archie linuxrc functions library by z4ziggy, 2005-2006
+# change as you like, just dont blame me...
+#
+# code is heavily commented, for archie is a work in progress.
+# hope those comments will prove themselves usefull too ;)
+#
+# this code is under the GPL license.
+##
+###############################################################################
+
+###############################################################################
+## variables
+##
+## the main reason for providing the following variables is so you can change
+## the default Archie startup behavior. do note that there are more variables
+## in the code, though i didnt assume their defaults should be changed. please
+## update me if you find something i missed...
+##
+
+# search for nesting on bootup
+NESTSEARCH="yes"
+
+# default username to use on nesting
+DEFAULT_USERNAME="archie"
+
+# add partitions to fstab for automatic mounting on startup
+AUTOFSTAB="yes"
+
+# entries to be added automatically to fstab
+FSTABENTRIES=""
+
+# initial partitions list (ls -A1d /sys/block/*/dev /sys/block/*/*/dev 2>/dev/null)
+PARTITIONS=""
+
+# eject cd on shutdown and/or copy_archie_to_ram
+EJECTCD="yes"
+
+# nesting signatures
+ROOTNESTFILE=.archie.root.nesting
+ROOTNESTDIR=archie.rot
+HOMENESTFILE=.archie.home.nesting
+HOMENESTDIR=archie.hom
+
+# colors to be used in printhl function
+# using Arch linux colors scheme
+C_MAIN="\033[1;37m"       # main text
+C_OTHER="\033[1;34m"      # prefix & brackets
+C_SEPARATOR="\033[1;30m"  # separator
+C_H1="\033[1;37m"         # highlight text 1
+C_H2="\033[1;36m"         # highlight text 2
+C_CLEAR="\033[1;0m"       # back to normal
+C_BUSY="\033[0;36m"       # status busy
+C_FAIL="\033[1;31m"       # status failed
+C_DONE="\033[1;37m"       # status completed
+# lines prefix
+PREFIX_REG="::"           # prefix status lines
+PREFIX_HL=" >"            # prefix printhl char
+# column for status messages. setting it later after we setup busybox commands...
+#STAT_COL=`stty size | awk '{ print $2-9 }'`
+
+BOOTSPLASH_DELTA=20
+BOOTSPLASH_PROGRESS=0
+
+###############################################################################
+## functions
+
+# bootsplash functions:
+#step_splash()
+#{
+#	grep -qs silent /proc/splash || return 0
+#	BOOTSPLASH_PROGRESS=`expr $BOOTSPLASH_PROGRESS + 1`
+#	echo "show `expr 65534 \* $BOOTSPLASH_PROGRESS / $BOOTSPLASH_DELTA`" > /proc/splash
+#}
+
+# a wrapper print function with colors
+printhl(){
+	echo -e "$C_OTHER$PREFIX_HL $C_H1$1$C_CLEAR "
+}
+# status procedures, taken from Arch linux init scripts
+deltext() {
+        echo -ne "\033[${STAT_COL}G"
+}
+stat_busy() {
+        echo -ne "$C_OTHER$PREFIX_REG $C_MAIN$1$C_CLEAR "
+        deltext
+        echo -ne "   $C_OTHER[${C_BUSY}BUSY$C_OTHER]$C_CLEAR "
+}
+stat_done() {
+        deltext
+        echo -e "   $C_OTHER[${C_DONE}DONE$C_OTHER]$C_CLEAR "
+#	step_splash
+}
+stat_fail() {
+        deltext
+        echo -e "   $C_OTHER[${C_FAIL}FAIL$C_OTHER]$C_CLEAR "
+#	step_splash
+}
+status() {
+        stat_busy "$1"
+        shift
+        $* >/dev/null 2>&1
+        if [ $? -eq 0 ]; then
+                stat_done
+                return 0
+        else
+                stat_fail
+                return 1
+        fi
+}
+
+# search for valid swaps partitions or pagefile.sys, and add
+# them into fstab
+scan_for_swaps()
+{
+	#printhl "Scanning for swaps"
+	# temp list of partitions
+	FDISKLST=/tmp/fdisk.lst
+	fdisk -l 2>/dev/null > $FDISKLST
+	while read PARTITION; do
+		# if line doesnt begin with "/dev" its not for us...
+		[ "${PARTITION#\/dev}" = "$PARTITION" ] && continue
+		set $PARTITION
+		# echo -n "`basename $1` "
+		# $6+$7 are the partition type (optional 2 words)
+		SWAP_DEVICE="$1"
+		case $6 in
+			*fat*|ntfs|*dos)
+				# scanning for a pagefile
+				# 1st we check if this device is already mounted (by nesting)
+				ALREADY_MOUNTED="no"
+				DOSMOUNT=`awk '{if ($1=="'$SWAP_DEVICE'") { print $2; exit }}' /proc/mounts`
+				#echo "1: $DOSMOUNT"
+				[ -z "$DOSMOUNT" ] && DOSMOUNT=`mount_device $SWAP_DEVICE` || ALREADY_MOUNTED="yes"
+				[ -z "$DOSMOUNT" ] && continue
+				#echo "2: $DOSMOUNT"
+				# we dont check for partition type, to allow pagefile.sys on every type
+				# MOUNTTYPE=`awk '{ if ($2=="'$NESTMOUNT'") { print $3;q }}' /proc/mounts`
+				if [ -f $DOSMOUNT/pagefile.sys ]; then
+					#printhl "Adding pagefile.sys as swap from $1"
+					mkswap $DOSMOUNT/pagefile.sys 
+					DIRS2MKDIR="$DIRS2MKDIR /mnt/liveroot$DOSMOUNT"
+					FSTABENTRIES="${FSTABENTRIES}${SWAP_DEVICE} $DOSMOUNT auto defaults 0 0 #archie\n"
+					FSTABENTRIES="${FSTABENTRIES}${DOSMOUNT}/pagefile.sys swap swap defaults 0 0 #archie\n"
+				fi
+				# release this mount only if this partition wasnt previsouly mounted
+				if [ "$ALREADY_MOUNTED" = "no" ]; then
+					umount $DOSMOUNT
+					rmdir $DOSMOUNT
+				fi
+				;;
+			*)
+				case $7 in swap)
+					#printhl "Adding swap partition $1"
+					FSTABENTRIES="${FSTABENTRIES}${SWAP_DEVICE} swap swap defaults 0 0 #archie\n"
+					;;
+				esac
+		esac
+	done < $FDISKLST
+	rm $FDISKLST
+}
+
+# scan each new device, check if its a valid partition, and 
+# make approp fstab entry and mount nest directory if found
+scan_device()
+{
+	DEVICE="$1"
+	BASENAME=`basename $DEVICE`
+	# ignore irrelevant devices (loop/ram)
+	case $BASENAME in loop*|ram*|md*) return; ;; esac
+	# ok, this is a proper drive/parition, lets try to mount it
+	DEVMOUNT=`mount_device $DEVICE`
+	# if we cant mount it, we gracefully ignore it...
+	[ -z "$DEVMOUNT" ] && return
+	# ok, this is a valid partition, lets add it to fstab
+	if [ "$AUTOFSTAB" = "yes" ]; then
+		#printhl "Adding partition $1"
+		DIRS2MKDIR="$DIRS2MKDIR /mnt/liveroot$DEVMOUNT"
+		# get mount type AND r/w permissions (seperated with space)
+		MOUNTTYPE=`awk '{ if ($1=="'$DEVICE'") { print $3" "$4;q }}' /proc/mounts`
+		# dropping unneeded options after rw/ro parameter (if any)
+		MOUNTTYPE="${MOUNTTYPE%%,*}"
+		MOUNTPARAMS="noatime,users,defaults,exec"
+		case "${MOUNTTYPE%% *}" in *fat*|ntfs|*dos) MOUNTPARAMS="noatime,users,exec,uid=0,gid=100,umask=007"; ;; esac
+		FSTABENTRIES="${FSTABENTRIES}${DEVICE} $DEVMOUNT $MOUNTTYPE,$MOUNTPARAMS 0 0 #archie\n"
+	fi
+	# is there an Archie compressed file there?
+	if [ -z "$BOOTDEV" ] && [ -f "$DEVMOUNT/archie.sqf" ]; then
+		#printhl "Found Archie image on $DEVICE"
+		BOOTDEV=$DEVMOUNT
+	fi
+	# check if we need to search for nesting
+	if [ "$NESTSEARCH" = "no" ]; then
+		# check if we can release this mount
+		if [ ! "$BOOTDEV" = "$DEVMOUNT" ]; then
+			umount $DEVMOUNT
+			rmdir $DEVMOUNT
+		fi
+		return
+	fi
+	# scan for nesting
+	# set appropriate nest if one is found
+	# we ignore the nest if cmdline nesting was specified
+	if [ -z "$ROOTNEST" ] && [ -f "$DEVMOUNT/$ROOTNESTFILE" ]; then
+		#printhl "Found Archie root nest on $DEVICE"
+		ROOTNEST=$DEVICE
+		ROOTMOUNT=$DEVMOUNT
+	elif [ -z "$HOMENEST" ] && [ -f "$DEVMOUNT/$HOMENESTFILE" ]; then
+		#printhl "Found Archie home nest on $DEVICE"
+		HOMENEST=$DEVICE
+		HOMEMOUNT=$DEVMOUNT
+	elif [ -z "$ROOTNEST" ] && [ -d "$DEVMOUNT/$ROOTNESTDIR" ]; then
+		#printhl "Found Archie root nest on $DEVICE"
+		ROOTNEST=$DEVICE
+		ROOTMOUNT=$DEVMOUNT/$ROOTNESTDIR
+	elif [ -z "$HOMENEST" ] && [ -d "$DEVMOUNT/$HOMENESTDIR" ]; then
+		#printhl "Found Archie home nest on $DEVICE"
+		HOMENEST=$DEVICE
+		HOMEMOUNT=$DEVMOUNT/$HOMENESTDIR
+	else
+		# check if we can release this mount
+		if [ ! "$BOOTDEV" = "$DEVMOUNT" ]; then
+			umount $DEVMOUNT
+			rmdir $DEVMOUNT
+		fi
+	fi
+	# if we already have both nesting-mounts, no need to search for others...
+	[ "$ROOTMOUNT" ] && [ "$HOMEMOUNT" ] && NESTSEARCH="no"
+	return 0
+}
+
+# scans a list (of block devices) to be added as fstab/nest entries
+scan_devices()
+{
+	for DEVICE in $1; do
+		DEVNAME=/dev/`echo $DEVICE | awk -F/ '{print $--NF}'`
+		#echo $DEVNAME
+		if [ ! -b "$DEVNAME" ]; then
+			DEVPARAMS=`awk -F: '{print $1" "$2}' $DEVICE`
+			mknod $DEVNAME b $DEVPARAMS
+			# now lets see if this is a usefull partition...
+			scan_device $DEVNAME
+		fi
+	done
+}
+
+# copy archie.sqf to a tmpfs directory (/archie.ram) and
+# change BOOTDEV to point to it instead of the actual boot device
+copy_archie_to_ram()
+{
+	RAMDIR="/archie.ram"
+	mkdir -p $RAMDIR
+	# making sure we have enough room for the image
+	IMAGESIZE=`ls -l $BOOTDEV/archie.sqf | awk '{print $5+1000000}'`
+	mount -t tmpfs -o "size=$IMAGESIZE" tmpfs $RAMDIR
+	[ "$?" -ne 0 ] && return
+	# copy the archie.sqf image to a tmpfs directory to be used as the new BOOTDEV
+	cp -R $BOOTDEV/archie.sqf $RAMDIR
+	[ "$?" -ne 0 ] && return
+	if [ "$EJECTCD" = "yes" ]; then
+		# we want to allow the cdrom to be ejected
+		echo 0 >/proc/sys/dev/cdrom/lock && echo 1 >/proc/sys/dev/cdrom/autoeject
+		# no need for all cdrom...
+		#for cdrom in /proc/sys/dev/cdrom*/lock; do [ -f "$cdrom" ] && echo 0 > "$cdrom"; done
+		#for cdrom in /proc/sys/dev/cdrom*/autoeject; do [ -f "$cdrom" ] && echo 1 > "$cdrom"; done
+	fi
+	# free the boot device
+	umount $BOOTDEV
+	# and use our new directory as the new BOOTDEV
+	BOOTDEV=$RAMDIR
+}
+
+# format shfs cheatcode and add proper fstab entry
+add_shfs_fstab()
+{
+	# get shfs user and server params
+	SHFS_USR_SVR="${SHFSPARAMS%%:*}"
+	# get shfs mount point
+	SHFS_MNT_PNT="${SHFSPARAMS##*:}"
+	# make sure mount point exist and is not a user's home directory (useradd used in rc.sysinit)
+	[ ! -d /mnt/liveroot$SHFS_MNT_PNT ] && [ "$SHFS_MNT_PNT" != "/home/$USERNAME" ] && mkdir -p /mnt/liveroot$SHFS_MNT_PNT
+	echo -e "$SHFS_USR_SVR $SHFS_MNT_PNT shfs user 0 0 #archie\n" >> /mnt/liveroot/etc/fstab
+}
+
+# prepare root (/) using unionfs
+make_union_root()
+{
+	# check if rootnest was requested on cmdline
+	if [ "$ROOTNEST" ] && [ -z "$ROOTMOUNT" ]; then
+		ROOTMOUNT=`nest_device $ROOTNEST $ROOTNESTDIR $ROOTNESTFILE`
+	fi
+	# using /tmp in liveroot as default ROOTMOUNT
+	if [ -z "$ROOTMOUNT" ]; then
+		ROOTMOUNT="/tmp"
+		mount -t tmpfs -o "size=80%" tmpfs $ROOTMOUNT
+	fi
+	# let the magic begin... :)
+	mount -r -t squashfs -o loop $BOOTDEV/archie.sqf /mnt/squashimg >/dev/null 2>&1 
+	# rm -r /tmp/* >/dev/null 2>&1 
+	# dirs: put most up-to-date dirs 1st 
+	mount -t $unionfs -o debug=0,dirs=$ROOTMOUNT=rw:/mnt/squashimg=ro none /mnt/liveroot
+	# we now have /mnt/liveroot ready to be used as root, lets make some changes...
+	# 1st we set language settings
+	if [ "$LANGUAGE" ]; then
+		grep "export LANGUAGE=" /mnt/liveroot/etc/profile > /dev/null
+		if [ $? -eq 0 ]; then
+			# if we have LANGUAGE=xxx then replace it
+			sed 's|LANGUAGE=.*|LANGUAGE=\"'$LANGUAGE'\"|' /mnt/liveroot/etc/profile > /mnt/liveroot/etc/profile.tmp
+		else
+			# if we dont have LANGUAGE=xxx then add it at the begining of the file
+			echo "export LANGUAGE=\"$LANGUAGE\"" > /mnt/liveroot/etc/profile.tmp
+			cat /mnt/liveroot/etc/profile >> /mnt/liveroot/etc/profile.tmp
+		fi
+		mv /mnt/liveroot/etc/profile.tmp /mnt/liveroot/etc/profile
+	fi
+	# patch rc.conf with approp KEYMAP (tnx balliano!)
+	[ -z "$KEYMAP" ] && KEYMAP=$LANGUAGE
+	if [ "$KEYMAP" ]; then
+		sed -i 's|KEYMAP=.*|KEYMAP=\"'$KEYMAP'\"|' /mnt/liveroot/etc/rc.conf 
+	fi
+	if [ "$LANG" ]; then
+		grep "export LANG=" /mnt/liveroot/etc/profile > /dev/null
+		if [ $? -eq 0 ]; then
+			# if we have LANG=xxx then replace it
+			sed 's|LANG=.*|LANG=\"'$LANG'\"|' /mnt/liveroot/etc/profile > /mnt/liveroot/etc/profile.tmp
+		else
+			# if we dont have LANG=xxx then add it at the begining of the file
+			echo "export LANG=\"$LANG\"" > /mnt/liveroot/etc/profile.tmp
+			cat /mnt/liveroot/etc/profile >> /mnt/liveroot/etc/profile.tmp
+		fi
+		mv /mnt/liveroot/etc/profile.tmp /mnt/liveroot/etc/profile
+	fi
+
+	if [ "$IVMAN" ]; then
+		sed -i 's|DAEMONS=.*[^)]|& dbus hal ivman|' /mnt/liveroot/etc/rc.conf
+	fi
+	#printhl "Updating fstab entries"
+	# making proper fstab entries
+	# first we clean previous entries...
+	sed -i '/#archie/d' /mnt/liveroot/etc/fstab
+	# now we can add new entries
+	# TODO
+	# check for "HOME=" in cmdline, and add approp "/root" in fstab...
+	echo -e "$FSTABENTRIES" >> /mnt/liveroot/etc/fstab
+	# if shfs was requested, add it to fstab
+	[ "$SHFSPARAMS" ] && add_shfs_fstab
+	# and create the directories we need if any
+	[ "$DIRS2MKDIR" ] && mkdir -p $DIRS2MKDIR
+	# nest home-mount if requsted
+	# check if homenest was requested on cmdline
+	if [ "$HOMENEST" ] && [ -z "$HOMEMOUNT" ]; then
+		HOMEMOUNT=`nest_device $HOMENEST $HOMENESTDIR $HOMENESTFILE`
+	fi
+	if [ "$HOMEMOUNT" ]; then
+		mount -t $unionfs -o debug=0,dirs=$HOMEMOUNT=rw:/mnt/squashimg/home=ro none /mnt/liveroot/home
+	fi
+	# make sure we have a console for output ;)
+	[ ! -e /mnt/liveroot/dev/console ] && mknod /mnt/liveroot/dev/console c 5 1
+	# ugly way to make sure we have "finished ok" status...
+	return 0
+}
+
+# lists /sys/block/* again and compare to inital list to retrieve
+# only new block-devices added
+get_new_partitions()
+{
+	ALLPARTITIONS=`ls -A1d /sys/block/*/dev /sys/block/*/*/dev 2>/dev/null`
+	PARTSARRAY="$PARTITIONS\n$ALLPARTITIONS"
+	echo -e "$PARTSARRAY" | sed 's/[ ][ ]*/\n/g' | sort | uniq -u
+}
+
+# scan ide devices - default startup scan
+scan_ide_devices()
+{
+	#printhl "Scanning ide devices..."
+	insmod /modules/isofs.ko >/dev/null 2>&1
+	insmod /modules/udf.ko >/dev/null 2>&1
+	[ -z "$PARTITIONS" ] && PARTITIONS=`ls -A1d /sys/block/*/dev /sys/block/*/*/dev 2>/dev/null`
+	scan_devices "$PARTITIONS"
+}
+
+# scans for firewire partitions, loads firewire modules if needed.
+scan_firewire_devices()
+{
+	#printhl "Scanning firewire devices..."
+	# we only check for FIREWIREMODULESLOADED since this might be the 2nd
+	# time we reach here if boot-device isnt firewire nor cdrom, but boot
+	# cmdline was "boot=firewire"...
+	if [ "$FIREWIREMODULESLOADED" != "yes" -a -f /modules/ieee1394.ko ]; then
+		#echo "loading firewire modules"
+		# loading the firewire modules in the correct order (tnx iphitus :-)
+		insmod /modules/ieee1394.ko >/dev/null 2>&1
+		insmod /modules/sbp2.ko >/dev/null 2>&1
+		insmod /modules/ohci1394.ko >/dev/null 2>&1
+		insmod /modules/sr_mod.ko >/dev/null 2>&1
+		# sleep = ugly ugly ugly ugly
+		# but what am i todo??? fucking drives takes some time to init... :(
+		# we can put a sleep timer to check every 1 second for changes, but it sux too...
+		sleep 6
+		FIREWIREMODULESLOADED="yes"
+	fi
+	scan_devices "`get_new_partitions`"
+}
+
+# scans for usb partitions, loads usb modules if needed.
+scan_usb_devices()
+{
+	#printhl "Scanning usb devices..."
+	# we only check for USBMODULESLOADED since this might be the 2nd
+	# time we reach here if boot-device isnt usb nor cdrom, but boot
+	# cmdline was "boot=usb"...
+	if [ "$USBMODULESLOADED" != "yes" -a -f /modules/usbcore.ko ]; then
+		#echo "loading usb modules"
+		insmod /modules/usbcore.ko >/dev/null 2>&1
+		insmod /modules/ohci-hcd.ko >/dev/null 2>&1
+		insmod /modules/uhci-hcd.ko >/dev/null 2>&1
+		insmod /modules/ehci-hcd.ko >/dev/null 2>&1
+		insmod /modules/usb-storage.ko >/dev/null 2>&1
+		# ugly ugly ugly ugly
+		# but what am i todo??? fucking drives takes some time to init... :(
+		sleep 6
+		USBMODULESLOADED="yes"
+	fi
+	scan_devices "`get_new_partitions`"
+}
+
+# scans scsi devices
+scan_scsi_devices()
+{
+	if [ "$SCSIMODULESLOADED" != "yes" -a -f /modules/sr_mod.ko ]; then
+		#echo "loading scsi modules"
+		insmod /modules/sr_mod.ko >/dev/null 2>&1
+		SCSIMODULESLOADED="yes"
+	fi
+	scan_devices "`get_new_partitions`"
+}
+
+# a wrapper function for mounting new devices
+mount_device()
+{
+	DEVMOUNT=/mnt/`basename $1`
+	# check if device is mounted already
+	if [ -d $DEVMOUNT ]; then
+	#if [ "`grep $1 /proc/mounts`" ]; then
+		echo $DEVMOUNT
+	else
+		mkdir -p $DEVMOUNT
+		mount $1 $DEVMOUNT >/dev/null 2>&1 && echo $DEVMOUNT || rmdir $DEVMOUNT
+	fi
+}
+
+# determine the nest type and make proper dir/file
+nest_device()
+{
+	DEVMOUNT=`mount_device $1`
+	if [ "$DEVMOUNT" ]; then
+		#printhl "Nesting $1"
+		MOUNTTYPE=`awk '{ if ($2=="'$DEVMOUNT'") { print $3;q }}' /proc/mounts`
+		# # if fat/ntfs/dos mkdir... else touch file watermark
+		case $MOUNTTYPE in
+			*fat*|ntfs|*dos)
+				mkdir -p $DEVMOUNT/$2
+				# if username specified, save it in the nest file :-)
+				[ "$USERNAME" ] && echo "$USERNAME" > $DEVMOUNT/$2/$2
+				;;
+			*)
+				# if username specified, save it in the nest file :-)
+				[ "$USERNAME" ] && echo "$USERNAME" > $DEVMOUNT/$3
+				touch $DEVMOUNT/$3
+				;;
+		esac
+		echo $DEVMOUNT
+	fi
+}
+
+# symlinking busybox executables on the fly in the ramfs image
+init_busybox()
+{
+	# this is the best way to overcome initramfs not allowing us to link
+	# inside cpio archive - we link executables on runtime!
+	busybox_commands="/sbin/lsmod /bin/mkdir /bin/ls /bin/umount /bin/cp \
+	/bin/ash /bin/echo /bin/sh /bin/mknod /bin/stty /bin/rm /bin/grep \
+	/bin/ln /bin/rmdir /bin/sed /bin/mv /bin/sleep /bin/vi /bin/chmod \
+	/bin/mount /bin/cat /bin/touch /sbin/mkswap /sbin/switch_root \
+	/sbin/poweroff /sbin/fdisk /sbin/insmod /sbin/halt /sbin/pivot_root \
+	/sbin/reboot /usr/bin/[[ /usr/bin/[ /usr/bin/chvt /usr/bin/sort \
+	/usr/bin/basename /usr/bin/clear /usr/bin/uniq /usr/bin/test \
+	/usr/bin/awk /usr/bin/expr"
+	for command in $busybox_commands; do
+	    /bin/busybox ln -s /bin/busybox $command
+	done
+
+	# column for status messages
+	# setting it here after we have busybox commands...
+	STAT_COL=`stty size | awk '{ print $2-9 }'`
+}
+
+# initalize the system and save printk for later use
+init_archie()
+{
+	mount -t proc none /proc
+	mount -t sysfs sysfs /sys
+	
+	# saving original printk value
+	PRINTK=`cat /proc/sys/kernel/printk`
+	# we dont want kernel messages
+	echo '0' >/proc/sys/kernel/printk
+	# and make suspend2 shutup
+	[ -f /proc/suspend2/do_resume ] && echo 0 > /proc/suspend2/do_resume
+
+	for module in zlib_deflate zlib_inflate ide-core ide-generic ide-disk fat cdrom ide-cd \
+		unlzma sqlzma squashfs aufs unionfs sd_mod vfat msdos ntfs mbcache \
+		nls_cp437 nls_iso8859-1 nls_iso8859-2 jbd ext2 ext3 reiserfs reiser4 jfs xfs ; do
+		insmod /modules/$module.ko >/dev/null 2>&1
+	done
+	if [ -z "$unionfs" ]; then
+		unionfs=aufs
+		[ -z `lsmod | grep $unionfs` ] && unionfs=unionfs
+	fi
+
+	return 0
+}
+
+# checking for nesting parameters - should do it _only_ after all devices has been set up
+check_nest_params()
+{
+	[ -z "$CMDLINE" ] && return 0
+	set $CMDLINE
+	while [ "$1" ]; do 
+		case $1 in 
+			username=*)
+				USERNAME=$username
+				;;
+			homenest=*) 
+				HOMENEST=$homenest
+				if [ -z "$HOMENEST" ]; then
+					/usr/bin/chvt 1
+					printhl "Home nesting allows you to use a target partition to save changed files"
+					printhl "from your Archie /home directory."
+					printhl "Please specify the partition you wish to use as your home nesting from"
+					printhl "one of the followings partitions or press [ENTER] to skip."
+					printhl "Available partitions: `ls /dev/[h,s]d*`"
+					printhl "(This should be only done once - Archie will detect your nested partition"
+					printhl "automatically on each boot)."
+					read $HOMENEST
+				fi
+				;;
+			rootnest=*) 
+				ROOTNEST=$rootnest
+				if [ -z "$ROOTNEST" ]; then
+					/usr/bin/chvt 1
+					printhl "Root nesting allows you to use a target partition to save changed files"
+					printhl "from the entire Archie system."
+					printhl "Please specify the partition you wish to use as your root nesting from"
+					printhl "one of the followings partitions or press [ENTER] to skip."
+					printhl "Available partitions: `ls /dev/[h,s]d*`"
+					printhl "(This should be only done once - Archie will detect your nested partition"
+					printhl "automatically on each boot)."
+					read $ROOTNEST
+				fi
+				;;
+		esac
+		shift
+	done
+	[ -z "$USERNAME" ] && USERNAME="$DEFAULT_USERNAME"
+}
+
+# parsing command line parameters
+parse_cmdline()
+{
+#	step_splash
+	# scanning the cmdline for parameters...
+	CMDLINE=`cat /proc/cmdline`
+	[ -z "$CMDLINE" ] && return 0
+	set $CMDLINE
+	while [ "$1" ]; do 
+		case $1 in 
+			sherlock*) 
+				# congratulations. our 1st easter egg :)
+				#echo "verbose" > /proc/splash
+				/usr/bin/chvt 1
+				echo -e "\n"\
+					"\t'Is there any point to which you would wish to draw my attention?'\n"\
+					"\t'To the curious incident of the dog in the night-time.'\n"\
+					"\t'The dog did nothing in the night-time.'\n"\
+					"\t'That was the curious incident,' remarked Sherlock Holmes.\n"
+				;;
+			nonestsearch*) 
+				NESTSEARCH="no"
+				;;
+			ivman*)
+				IVMAN="yes"
+				AUTOFSTAB="no"
+				;;
+			noeject*)
+				EJECTCD="no"
+				;;
+			copy2ram*)
+				COPY2RAM="yes"
+				;;
+			initrdcli*) 
+				INITRDCLI="yes"
+				# to be on the safe side, we change bootsplash mode into verbose to see messages...
+				#echo "verbose" > /proc/splash
+				/usr/bin/chvt 1
+				;;
+			shfs=*)
+				SHFSPARAMS=$shfs
+				# user will be prompted for a password
+				#echo "verbose" > /proc/splash
+				/usr/bin/chvt 1
+				;;
+			lang=*)
+				LANG=$lang
+				;;
+			locale=*)
+				LOCALE=$locale
+				;;
+			language=*)
+				LANGUAGE=$language
+				;;
+			keymap=*)
+				KEYMAP=$keymap
+				;;
+			boot=*)
+				BOOT=$boot
+				;;
+		esac
+		shift
+	done
+}
+
+# finally we move control to hosted Arch linux! :-)
+start_host_system()
+{
+	# making sure we have those paths ready for use...
+	[ ! -d /mnt/liveroot/tmp ] && mkdir -p /mnt/liveroot/tmp
+	chmod 1777 /mnt/liveroot/tmp
+	[ ! -d /mnt/liveroot/var/log ] && mkdir -p /mnt/liveroot/var/log
+	#mkdir -p /mnt/liveroot/dev
+	#mkdir -p /mnt/liveroot/sys
+	#mkdir -p /mnt/liveroot/proc
+
+	# set proper root device
+	echo '0x0100' >/proc/sys/kernel/real-root-dev
+	# restore printk setting
+	echo "$PRINTK" >/proc/sys/kernel/printk
+
+	# Check for any change to default runlevel
+	for x in $CMDLINE; do
+		case "${x}" in
+			[0123456Ss])
+				init_arg=${x}
+				;;
+		esac
+	done
+	initcmd=`echo $CMDLINE | awk -Finit= '{print $2}' | awk '{print $1}'`
+	[ "${initcmd}" == "" ] && initcmd="/sbin/init";
+
+	# clean mounts
+	umount /sys /proc
+	#mount --bind /proc /mnt/liveroot/proc
+	#mount --bind /sys /mnt/liveroot/sys
+
+	exec /sbin/switch_root -c /dev/console /mnt/liveroot ${initcmd} ${init_arg}
+
+	# exec /usr/sbin/chroot . sbin/init <dev/console >dev/console 2>&1
+}
+
+skip_to_shell()
+{
+	# to be on the safe side, we change bootsplash mode into verbose to see messages...
+	#echo "verbose" > /proc/splash
+	/usr/bin/chvt 1
+	printhl "$1"
+	sh
+}
