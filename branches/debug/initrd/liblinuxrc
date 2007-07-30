@@ -103,6 +103,7 @@ status() {
 	stat_busy "$1"
 	shift
 	if [ "$DEBUG" == "yes" ]; then
+		echo
 		$*
 		result=$?
 		echo
