@@ -82,34 +82,41 @@ printhl(){
 }
 # status procedures, taken from Arch linux init scripts
 deltext() {
-        echo -ne "\033[${STAT_COL}G"
+	echo -ne "\033[${STAT_COL}G"
 }
 stat_busy() {
-        echo -ne "$C_OTHER$PREFIX_REG $C_MAIN$1$C_CLEAR "
-        deltext
-        echo -ne "   $C_OTHER[${C_BUSY}BUSY$C_OTHER]$C_CLEAR "
+	echo -ne "$C_OTHER$PREFIX_REG $C_MAIN$1$C_CLEAR "
+	deltext
+	echo -ne "   $C_OTHER[${C_BUSY}BUSY$C_OTHER]$C_CLEAR "
 }
 stat_done() {
-        deltext
-        echo -e "   $C_OTHER[${C_DONE}DONE$C_OTHER]$C_CLEAR "
+	deltext
+	echo -e "   $C_OTHER[${C_DONE}DONE$C_OTHER]$C_CLEAR "
 #	step_splash
 }
 stat_fail() {
-        deltext
-        echo -e "   $C_OTHER[${C_FAIL}FAIL$C_OTHER]$C_CLEAR "
+	deltext
+	echo -e "   $C_OTHER[${C_FAIL}FAIL$C_OTHER]$C_CLEAR "
 #	step_splash
 }
 status() {
-        stat_busy "$1"
-        shift
-        $* >/dev/null 2>&1
-        if [ $? -eq 0 ]; then
-                stat_done
-                return 0
-        else
-                stat_fail
-                return 1
-        fi
+	stat_busy "$1"
+	shift
+	if [ "$DEBUG" == "yes" ]; then
+		$*
+		result=$?
+		echo
+	else
+		$* >/dev/null 2>&1
+		result=$?
+	fi
+	if [ $result -eq 0 ]; then
+			stat_done
+			return 0
+	else
+			stat_fail
+			return 1
+	fi
 }
 
 # search for valid swaps partitions or pagefile.sys, and add
@@ -604,8 +611,8 @@ parse_cmdline()
 			copy2ram*)
 				COPY2RAM="yes"
 				;;
-			initrdcli*) 
-				INITRDCLI="yes"
+			debug*) 
+				DEBUG="yes"
 				# to be on the safe side, we change bootsplash mode into verbose to see messages...
 				#echo "verbose" > /proc/splash
 				/usr/bin/chvt 1

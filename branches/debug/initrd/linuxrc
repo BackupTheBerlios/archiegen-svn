@@ -22,8 +22,8 @@ version=0.6
 BOOT="ide scsi usb firewire"
 # boot device used on boot (/dev/hda1, etc)
 BOOTDEV=""
-# skip into shell in ramdrive
-INITRDCLI="no"
+# for debugging the initramfs
+DEBUG="no"
 
 ###############################################################################
 ## party on!
@@ -32,13 +32,9 @@ INITRDCLI="no"
 init_busybox
 
 printhl "Archie v$version $C_OTHER(${C_H2}Vika$C_OTHER)$C_H1, by z4ziggy at user-contributions.org\n"
-
-mount -t proc none /proc
-mount -t sysfs sysfs /sys
-skip_to_shell "Ok man, skipping into shell. CTRL-D to continue normal startup"
-
 status "Setting up environment" init_archie
 parse_cmdline
+[ "$DEBUG" = "yes" ] && skip_to_shell "Dropping into busybox shell, press [CTRL-D] to continue boot"
 
 # scanning for boot device according to BOOT order :)
 for BOOTTYPE in $BOOT; do
@@ -60,7 +56,7 @@ status "Preparing host system " make_union_root
 [ ! -z "$HOMENEST" ] && printhl "Using home nesting on $HOMENEST"
 
 # check if we were requested to drop into initrd shell
-[ "$INITRDCLI" = "yes" ] && skip_to_shell "Dropping into busybox shell (initrdcli), press [CTRL-D] to continue boot"
+[ "$DEBUG" = "yes" ] && skip_to_shell "Dropping into busybox shell, press [CTRL-D] to continue boot"
 
 printhl "Starting hosted system" && start_host_system
 # and start pivot_root with our new live-root! <-- obsolete...
